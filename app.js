@@ -19,6 +19,11 @@ const heatmapTrendGainRange = document.getElementById('heatmapTrendGainRange');
 const heatmapTrendGainValue = document.getElementById('heatmapTrendGainValue');
 const heatmapTrendDeadbandRange = document.getElementById('heatmapTrendDeadbandRange');
 const heatmapTrendDeadbandValue = document.getElementById('heatmapTrendDeadbandValue');
+const fpsValue = document.getElementById('fpsValue');
+const frameCpuValue = document.getElementById('frameCpuValue');
+const simCpuValue = document.getElementById('simCpuValue');
+const heatmapCpuValue = document.getElementById('heatmapCpuValue');
+const renderCpuValue = document.getElementById('renderCpuValue');
 
 const FIXED_STEP = 1 / 60;
 const BOID_COUNT = 10000;
@@ -84,6 +89,15 @@ let lastTextState = JSON.stringify({
   boidCount: BOID_COUNT,
   predatorCount: PREDATOR_COUNT,
 });
+const perfStats = {
+  fps: 0,
+  frameCpuMs: 0,
+  simCpuMs: 0,
+  heatmapCpuMs: 0,
+  renderCpuMs: 0,
+  alpha: 0.15,
+  lastPanelUpdate: 0,
+};
 
 const boidUpdateShader = `
 struct BoidState {
@@ -1116,8 +1130,10 @@ function reseedSimulation() {
 
 function stepSimulation(dtSeconds) {
   if (!gpu) {
-    return;
+    return { simCpuMs: 0, heatmapCpuMs: 0 };
   }
+  const simStart = performance.now();
+  let heatmapCpuMs = 0;
 
   const boidUpdateBindGroup = gpu.boidUpdateBindGroups[currentBoidBufferIndex];
   const predatorUpdateBindGroup = gpu.predatorUpdateBindGroups[currentBoidBufferIndex];
@@ -1160,6 +1176,7 @@ function stepSimulation(dtSeconds) {
     throw new Error('Missing heatmap compute bind group.');
   }
 
+  const heatmapStart = performance.now();
   const heatPass = encoder.beginComputePass();
   try {
     heatPass.setPipeline(gpu.heatmapComputePipeline);
@@ -1168,10 +1185,12 @@ function stepSimulation(dtSeconds) {
   } finally {
     heatPass.end();
   }
+  heatmapCpuMs = performance.now() - heatmapStart;
 
   currentHeatmapBufferIndex = 1 - currentHeatmapBufferIndex;
 
   gpu.device.queue.submit([encoder.finish()]);
+  return { simCpuMs: performance.now() - simStart, heatmapCpuMs };
 }
 
 function renderFrame() {
@@ -1219,26 +1238,61 @@ function renderFrame() {
   gpu.device.queue.submit([encoder.finish()]);
 }
 
+function updatePerformancePanel() {
+  if (!fpsValue || !frameCpuValue || !simCpuValue || !heatmapCpuValue || !renderCpuValue) {
+    return;
+  }
+  fpsValue.textContent = perfStats.fps.toFixed(1);
+  frameCpuValue.textContent = perfStats.frameCpuMs.toFixed(2);
+  simCpuValue.textContent = perfStats.simCpuMs.toFixed(2);
+  heatmapCpuValue.textContent = perfStats.heatmapCpuMs.toFixed(2);
+  renderCpuValue.textContent = perfStats.renderCpuMs.toFixed(2);
+}
+
+function recordPerformance(frameCpuMs, simCpuMs, heatmapCpuMs, renderCpuMs, instantFps, timestamp) {
+  const alpha = perfStats.alpha;
+  perfStats.fps = perfStats.fps + (instantFps - perfStats.fps) * alpha;
+  perfStats.frameCpuMs = perfStats.frameCpuMs + (frameCpuMs - perfStats.frameCpuMs) * alpha;
+  perfStats.simCpuMs = perfStats.simCpuMs + (simCpuMs - perfStats.simCpuMs) * alpha;
+  perfStats.heatmapCpuMs = perfStats.heatmapCpuMs + (heatmapCpuMs - perfStats.heatmapCpuMs) * alpha;
+  perfStats.renderCpuMs = perfStats.renderCpuMs + (renderCpuMs - perfStats.renderCpuMs) * alpha;
+
+  if (timestamp - perfStats.lastPanelUpdate >= 180) {
+    perfStats.lastPanelUpdate = timestamp;
+    updatePerformancePanel();
+  }
+}
+
 function tick(timestamp) {
   if (!gpu || gpuRuntimeError) {
     return;
   }
 
   try {
+    const frameCpuStart = performance.now();
     if (lastFrameTime === 0) {
       lastFrameTime = timestamp;
     }
 
     const rawDelta = (timestamp - lastFrameTime) / 1000;
+    const instantFps = rawDelta > 0.000001 ? 1 / rawDelta : 0;
     lastFrameTime = timestamp;
     accumulator += Math.min(rawDelta, 0.05);
+    let simCpuMs = 0;
+    let heatmapCpuMs = 0;
 
     while (accumulator >= FIXED_STEP) {
-      stepSimulation(FIXED_STEP);
+      const timings = stepSimulation(FIXED_STEP);
+      simCpuMs += timings.simCpuMs;
+      heatmapCpuMs += timings.heatmapCpuMs;
       accumulator -= FIXED_STEP;
     }
 
+    const renderStart = performance.now();
     renderFrame();
+    const renderCpuMs = performance.now() - renderStart;
+    const frameCpuMs = performance.now() - frameCpuStart;
+    recordPerformance(frameCpuMs, simCpuMs, heatmapCpuMs, renderCpuMs, instantFps, timestamp);
     updateTextState();
     requestAnimationFrame(tick);
   } catch (error) {
@@ -1741,6 +1795,7 @@ minSpeedValue.textContent = Number(minSpeedRange.value).toFixed(2);
 predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(1);
 updateHeatmapControlLabels();
 updateViewToggleLabel();
+updatePerformancePanel();
 
 resizeCanvas();
 updateTextState('initializing');

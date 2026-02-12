@@ -89,6 +89,11 @@ canvas {
   margin: 0;
 }
 
+.metric-line {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .control-group {
   display: grid;
   gap: 0.25rem;
