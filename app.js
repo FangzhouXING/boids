@@ -688,7 +688,6 @@ struct VSOut {
 @group(0) @binding(0) var<storage, read> heatSamples: array<HeatSample>;
 @group(0) @binding(1) var<uniform> params: SimParams;
 
-const DOT_SPACING: f32 = ${HEATMAP_DOT_SPACING.toFixed(1)};
 const DOT_RADIUS: f32 = 3.0;
 
 fn quad_vertex(vertexIndex: u32) -> vec2f {
@@ -714,11 +713,12 @@ fn quad_vertex(vertexIndex: u32) -> vec2f {
 fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
   let worldW = params.world.x;
   let worldH = params.world.y;
+  let dotSpacing = max(params.predatorB.x, 1.0);
 
-  let cols = max(1u, u32(floor(worldW / DOT_SPACING)));
+  let cols = max(1u, u32(floor(worldW / dotSpacing)));
   let sx = instanceIndex % cols;
   let sy = instanceIndex / cols;
-  let center = vec2f((f32(sx) + 0.5) * DOT_SPACING, (f32(sy) + 0.5) * DOT_SPACING);
+  let center = vec2f((f32(sx) + 0.5) * dotSpacing, (f32(sy) + 0.5) * dotSpacing);
   let local = quad_vertex(vertexIndex);
   let world = center + local * DOT_RADIUS;
 
@@ -782,7 +782,6 @@ struct SimParams {
 @group(0) @binding(2) var<storage, read_write> heatNext: array<HeatSample>;
 @group(0) @binding(3) var<uniform> params: SimParams;
 
-const DOT_SPACING: f32 = ${HEATMAP_DOT_SPACING.toFixed(1)};
 const DENSITY_RADIUS: f32 = 17.0;
 const DENSITY_RADIUS_SQ: f32 = DENSITY_RADIUS * DENSITY_RADIUS;
 const MIN_SAMPLES: u32 = 96u;
@@ -817,11 +816,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let worldH = params.world.y;
   let boidCount = max(1u, u32(params.counts.x));
   let dt = params.world.z;
+  let dotSpacing = max(params.predatorB.x, 1.0);
 
-  let cols = max(1u, u32(floor(worldW / DOT_SPACING)));
+  let cols = max(1u, u32(floor(worldW / dotSpacing)));
   let sx = idx % cols;
   let sy = idx / cols;
-  let samplePos = vec2f((f32(sx) + 0.5) * DOT_SPACING, (f32(sy) + 0.5) * DOT_SPACING);
+  let samplePos = vec2f((f32(sx) + 0.5) * dotSpacing, (f32(sy) + 0.5) * dotSpacing);
 
   let adaptiveSamples = boidCount / 48u + 96u;
   adaptiveSamples = clamp(adaptiveSamples, MIN_SAMPLES, MAX_SAMPLES);
@@ -999,12 +999,13 @@ function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   worldWidth = Math.max(1, Math.floor(rect.width));
   worldHeight = Math.max(1, Math.floor(rect.height));
-  const cols = Math.max(1, Math.floor(worldWidth / HEATMAP_DOT_SPACING));
-  const rows = Math.max(1, Math.floor(worldHeight / HEATMAP_DOT_SPACING));
-  heatmapPointCount = Math.min(cols * rows, HEATMAP_MAX_POINTS);
-
   const dpr = Math.max(window.devicePixelRatio || 1, 1);
   devicePixelRatioCached = dpr;
+  const dotSpacingWorld = Math.max(1, HEATMAP_DOT_SPACING / dpr);
+  const cols = Math.max(1, Math.floor(worldWidth / dotSpacingWorld));
+  const rows = Math.max(1, Math.floor(worldHeight / dotSpacingWorld));
+  heatmapPointCount = Math.min(cols * rows, HEATMAP_MAX_POINTS);
+
   canvas.width = Math.floor(worldWidth * dpr);
   canvas.height = Math.floor(worldHeight * dpr);
 }
@@ -1020,7 +1021,7 @@ function createParamsArray(dtSeconds) {
     config.maxSpeed, config.minSpeed, config.maxForce, config.maxTurnRate,
     config.maxTurnAcceleration, config.alignWeight, config.cohesionWeight, config.separationWeight,
     config.predatorAvoidWeight, config.predatorAttentionSeconds, config.predatorSeparationRadius, config.predatorSeparationWeight,
-    config.predatorPauseSlowdownSeconds, config.predatorSpeedFactor,
+    Math.max(1, HEATMAP_DOT_SPACING / devicePixelRatioCached), config.predatorSpeedFactor,
     predatorMaxTurnRate, predatorMaxTurnAcceleration,
   ]);
 }
