@@ -13,8 +13,11 @@ const BOID_COUNT = 10000;
 const PREDATOR_COUNT = 5;
 const BOID_WORKGROUP_SIZE = 128;
 const CATCH_CLEAR_WORKGROUP_SIZE = 32;
+const HEATMAP_WORKGROUP_SIZE = 128;
 const BOID_FLOATS = 8;
 const PREDATOR_FLOATS = 12;
+const HEATMAP_DOT_SPACING = 6;
+const HEATMAP_MAX_POINTS = 65536;
 
 const config = {
   perceptionRadius: 72,
@@ -49,6 +52,8 @@ let accumulator = 0;
 let lastFrameTime = 0;
 let currentBoidBufferIndex = 0;
 let renderMode = 'boids';
+let heatmapPointCount = 1;
+let currentHeatmapBufferIndex = 0;
 let gpu = null;
 let gpuRuntimeError = false;
 let lastTextState = JSON.stringify({
@@ -659,9 +664,8 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
 `;
 
 const boidHeatmapRenderShader = `
-struct BoidState {
-  posVel: vec4f,
-  headingTurn: vec4f,
+struct HeatSample {
+  densityDelta: vec4f,
 };
 
 struct SimParams {
@@ -676,11 +680,16 @@ struct SimParams {
 
 struct VSOut {
   @builtin(position) position: vec4f,
-  @location(0) radial: vec2f,
+  @location(0) local: vec2f,
+  @location(1) color: vec3f,
+  @location(2) alpha: f32,
 };
 
-@group(0) @binding(0) var<storage, read> boids: array<BoidState>;
+@group(0) @binding(0) var<storage, read> heatSamples: array<HeatSample>;
 @group(0) @binding(1) var<uniform> params: SimParams;
+
+const DOT_SPACING: f32 = ${HEATMAP_DOT_SPACING.toFixed(1)};
+const DOT_RADIUS: f32 = 3.0;
 
 fn quad_vertex(vertexIndex: u32) -> vec2f {
   if (vertexIndex == 0u) {
@@ -703,45 +712,155 @@ fn quad_vertex(vertexIndex: u32) -> vec2f {
 
 @vertex
 fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
-  let boid = boids[instanceIndex];
-  let radial = quad_vertex(vertexIndex);
-  let kernelRadius = 11.0;
-  let world = boid.posVel.xy + radial * kernelRadius;
+  let worldW = params.world.x;
+  let worldH = params.world.y;
 
-  let clipX = world.x / params.world.x * 2.0 - 1.0;
-  let clipY = 1.0 - world.y / params.world.y * 2.0;
+  let cols = max(1u, u32(floor(worldW / DOT_SPACING)));
+  let sx = instanceIndex % cols;
+  let sy = instanceIndex / cols;
+  let center = vec2f((f32(sx) + 0.5) * DOT_SPACING, (f32(sy) + 0.5) * DOT_SPACING);
+  let local = quad_vertex(vertexIndex);
+  let world = center + local * DOT_RADIUS;
+
+  let density = max(0.0, heatSamples[instanceIndex].densityDelta.x);
+  let trendSignal = heatSamples[instanceIndex].densityDelta.y;
+  let intensity = 1.0 - exp(-density * 0.055);
+  let trend = clamp(trendSignal, -1.0, 1.0);
+
+  let dark = vec3f(0.005, 0.015, 0.05);
+  let neutral = vec3f(0.62, 0.64, 0.68);
+  let up = vec3f(1.00, 0.20, 0.14);
+  let down = vec3f(0.18, 0.46, 1.00);
+  let hue = select(mix(neutral, down, -trend), mix(neutral, up, trend), trend >= 0.0);
+  let color = mix(dark, hue, smoothstep(0.02, 0.95, intensity));
+
+  let clipX = world.x / worldW * 2.0 - 1.0;
+  let clipY = 1.0 - world.y / worldH * 2.0;
 
   var out: VSOut;
   out.position = vec4f(clipX, clipY, 0.0, 1.0);
-  out.radial = radial;
+  out.local = local;
+  out.color = color;
+  out.alpha = smoothstep(0.03, 1.0, intensity);
   return out;
 }
 
 @fragment
 fn fsMain(in: VSOut) -> @location(0) vec4f {
-  let distSq = dot(in.radial, in.radial);
+  let distSq = dot(in.local, in.local);
   if (distSq > 1.0) {
     discard;
   }
+  let edge = 1.0 - smoothstep(0.65, 1.0, distSq);
+  let alpha = in.alpha * edge;
+  return vec4f(in.color * alpha, alpha);
+}
+`;
 
-  let core = exp(-distSq * 2.35);
-  let halo = exp(-distSq * 0.95);
-  let localDensity = core * 0.72 + halo * 0.28;
-  let contribution = localDensity * 0.082;
+const heatmapSampleComputeShader = `
+struct BoidState {
+  posVel: vec4f,
+  headingTurn: vec4f,
+};
 
-  let dark = vec3f(0.005, 0.015, 0.055);
-  let low = vec3f(0.06, 0.25, 0.75);
-  let mid = vec3f(0.24, 0.72, 1.00);
-  let hot = vec3f(1.00, 0.86, 0.20);
-  let peak = vec3f(1.00, 1.00, 0.94);
+struct HeatSample {
+  densityDelta: vec4f,
+};
 
-  let rampA = mix(dark, low, smoothstep(0.04, 0.32, localDensity));
-  let rampB = mix(low, mid, smoothstep(0.20, 0.62, localDensity));
-  let rampC = mix(mid, hot, smoothstep(0.52, 0.90, localDensity));
-  var color = mix(rampA, rampB, smoothstep(0.18, 0.58, localDensity));
-  color = mix(color, rampC, smoothstep(0.48, 0.88, localDensity));
-  color = mix(color, peak, smoothstep(0.90, 1.0, localDensity));
-  return vec4f(color * contribution, contribution);
+struct SimParams {
+  world: vec4f,
+  counts: vec4f,
+  boidA: vec4f,
+  boidB: vec4f,
+  boidC: vec4f,
+  predatorA: vec4f,
+  predatorB: vec4f,
+};
+
+@group(0) @binding(0) var<storage, read> boids: array<BoidState>;
+@group(0) @binding(1) var<storage, read> heatPrev: array<HeatSample>;
+@group(0) @binding(2) var<storage, read_write> heatNext: array<HeatSample>;
+@group(0) @binding(3) var<uniform> params: SimParams;
+
+const DOT_SPACING: f32 = ${HEATMAP_DOT_SPACING.toFixed(1)};
+const DENSITY_RADIUS: f32 = 17.0;
+const DENSITY_RADIUS_SQ: f32 = DENSITY_RADIUS * DENSITY_RADIUS;
+const MAX_SAMPLES: u32 = 224u;
+const TREND_DEADBAND: f32 = 0.045;
+const TREND_GAIN: f32 = 4.2;
+
+fn wrapped_abs_delta(a: f32, b: f32, size: f32) -> f32 {
+  let direct = abs(a - b);
+  return min(direct, size - direct);
+}
+
+fn hash_u32(x: u32) -> u32 {
+  var v = x;
+  v = v ^ (v >> 16u);
+  v = v * 0x7feb352du;
+  v = v ^ (v >> 15u);
+  v = v * 0x846ca68bu;
+  v = v ^ (v >> 16u);
+  return v;
+}
+
+@compute @workgroup_size(${HEATMAP_WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  let sampleCount = u32(params.counts.w);
+  if (idx >= sampleCount) {
+    return;
+  }
+
+  let worldW = params.world.x;
+  let worldH = params.world.y;
+  let boidCount = max(1u, u32(params.counts.x));
+  let dt = params.world.z;
+
+  let cols = max(1u, u32(floor(worldW / DOT_SPACING)));
+  let sx = idx % cols;
+  let sy = idx / cols;
+  let samplePos = vec2f((f32(sx) + 0.5) * DOT_SPACING, (f32(sy) + 0.5) * DOT_SPACING);
+
+  let sampleBoids = min(boidCount, MAX_SAMPLES);
+  let baseSeed = hash_u32(idx * 747796405u + 19u);
+  var boidIndex = baseSeed % boidCount;
+  var step = 1u;
+  if (boidCount > 1u) {
+    step = 1u + ((baseSeed >> 1u) % (boidCount - 1u));
+  }
+
+  var density = 0.0;
+  for (var i: u32 = 0u; i < sampleBoids; i = i + 1u) {
+    let boid = boids[boidIndex];
+    let dx = wrapped_abs_delta(samplePos.x, boid.posVel.x, worldW);
+    let dy = wrapped_abs_delta(samplePos.y, boid.posVel.y, worldH);
+    let distSq = dx * dx + dy * dy;
+    if (distSq < DENSITY_RADIUS_SQ) {
+      density = density + exp(-distSq * 0.014);
+    }
+    boidIndex = (boidIndex + step) % boidCount;
+  }
+
+  let rawDensity = density * (f32(boidCount) / f32(sampleBoids));
+  let previousDensity = heatPrev[idx].densityDelta.x;
+  let previousTrend = heatPrev[idx].densityDelta.y;
+  let previousFast = heatPrev[idx].densityDelta.z;
+  let previousSlow = heatPrev[idx].densityDelta.w;
+
+  let fastBlend = clamp(dt * 9.5, 0.12, 0.32);
+  let slowBlend = clamp(dt * 2.1, 0.03, 0.12);
+  let fastDensity = previousFast + (rawDensity - previousFast) * fastBlend;
+  let slowDensity = previousSlow + (rawDensity - previousSlow) * slowBlend;
+  let smoothedDensity = fastDensity + (previousDensity - fastDensity) * 0.08;
+
+  let trendRaw = fastDensity - slowDensity;
+  let trendMagnitude = max(0.0, abs(trendRaw) - TREND_DEADBAND);
+  let trendSigned = sign(trendRaw) * trendMagnitude;
+  let trendNormalized = clamp(trendSigned * TREND_GAIN, -1.0, 1.0);
+  let smoothedTrend = previousTrend + (trendNormalized - previousTrend) * 0.18;
+
+  heatNext[idx].densityDelta = vec4f(smoothedDensity, smoothedTrend, fastDensity, slowDensity);
 }
 `;
 
@@ -864,6 +983,7 @@ function updateTextState(mode = 'running') {
     predatorCount: PREDATOR_COUNT,
     frameIndex,
     viewMode: renderMode,
+    heatmapPoints: heatmapPointCount,
     maxTurnAccelerationDegPerSec2: Number(turnAccelRange.value),
     minSpeed: Number(minSpeedRange.value),
     predatorAttentionSeconds: Number(predatorAttentionRange.value),
@@ -875,6 +995,9 @@ function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   worldWidth = Math.max(1, Math.floor(rect.width));
   worldHeight = Math.max(1, Math.floor(rect.height));
+  const cols = Math.max(1, Math.floor(worldWidth / HEATMAP_DOT_SPACING));
+  const rows = Math.max(1, Math.floor(worldHeight / HEATMAP_DOT_SPACING));
+  heatmapPointCount = Math.min(cols * rows, HEATMAP_MAX_POINTS);
 
   const dpr = Math.max(window.devicePixelRatio || 1, 1);
   devicePixelRatioCached = dpr;
@@ -888,7 +1011,7 @@ function createParamsArray(dtSeconds) {
   const predatorMaxTurnAcceleration = config.maxTurnAcceleration * config.predatorTurnAccelerationFactor;
   return new Float32Array([
     worldWidth, worldHeight, dtSeconds, frameScale,
-    BOID_COUNT, PREDATOR_COUNT, frameIndex, 0,
+    BOID_COUNT, PREDATOR_COUNT, frameIndex, heatmapPointCount,
     config.perceptionRadius, config.separationRadius, config.predatorAvoidRadius, config.predatorCatchRadius,
     config.maxSpeed, config.minSpeed, config.maxForce, config.maxTurnRate,
     config.maxTurnAcceleration, config.alignWeight, config.cohesionWeight, config.separationWeight,
@@ -911,15 +1034,19 @@ function reseedSimulation() {
   const boidData = createInitialBoidData();
   const predatorData = createInitialPredatorData();
   const zeroFlags = new Uint32Array(PREDATOR_COUNT);
+  const zeroHeat = new Float32Array(HEATMAP_MAX_POINTS * 4);
 
   gpu.device.queue.writeBuffer(gpu.boidBuffers[0], 0, boidData);
   gpu.device.queue.writeBuffer(gpu.boidBuffers[1], 0, boidData);
   gpu.device.queue.writeBuffer(gpu.predatorBuffer, 0, predatorData);
   gpu.device.queue.writeBuffer(gpu.caughtFlagsBuffer, 0, zeroFlags);
+  gpu.device.queue.writeBuffer(gpu.heatmapBuffers[0], 0, zeroHeat);
+  gpu.device.queue.writeBuffer(gpu.heatmapBuffers[1], 0, zeroHeat);
 
   frameIndex = 0;
   accumulator = 0;
   currentBoidBufferIndex = 0;
+  currentHeatmapBufferIndex = 0;
   writeParams(FIXED_STEP);
   updateTextState();
 }
@@ -938,32 +1065,52 @@ function stepSimulation(dtSeconds) {
   writeParams(dtSeconds);
 
   const encoder = gpu.device.createCommandEncoder();
-  const computePass = encoder.beginComputePass();
+  const simPass = encoder.beginComputePass();
 
   try {
-    computePass.setPipeline(gpu.clearCaughtPipeline);
-    computePass.setBindGroup(0, gpu.clearCaughtBindGroup);
-    computePass.dispatchWorkgroups(Math.ceil(PREDATOR_COUNT / CATCH_CLEAR_WORKGROUP_SIZE));
+    simPass.setPipeline(gpu.clearCaughtPipeline);
+    simPass.setBindGroup(0, gpu.clearCaughtBindGroup);
+    simPass.dispatchWorkgroups(Math.ceil(PREDATOR_COUNT / CATCH_CLEAR_WORKGROUP_SIZE));
 
-    computePass.setPipeline(gpu.predatorUpdatePipeline);
-    computePass.setBindGroup(0, predatorUpdateBindGroup);
-    computePass.dispatchWorkgroups(1);
+    simPass.setPipeline(gpu.predatorUpdatePipeline);
+    simPass.setBindGroup(0, predatorUpdateBindGroup);
+    simPass.dispatchWorkgroups(1);
 
-    computePass.setPipeline(gpu.boidUpdatePipeline);
-    computePass.setBindGroup(0, boidUpdateBindGroup);
-    computePass.dispatchWorkgroups(Math.ceil(BOID_COUNT / BOID_WORKGROUP_SIZE));
+    simPass.setPipeline(gpu.boidUpdatePipeline);
+    simPass.setBindGroup(0, boidUpdateBindGroup);
+    simPass.dispatchWorkgroups(Math.ceil(BOID_COUNT / BOID_WORKGROUP_SIZE));
 
-    computePass.setPipeline(gpu.predatorResolvePipeline);
-    computePass.setBindGroup(0, gpu.predatorResolveBindGroup);
-    computePass.dispatchWorkgroups(1);
+    simPass.setPipeline(gpu.predatorResolvePipeline);
+    simPass.setBindGroup(0, gpu.predatorResolveBindGroup);
+    simPass.dispatchWorkgroups(1);
   } finally {
-    computePass.end();
+    simPass.end();
   }
-
-  gpu.device.queue.submit([encoder.finish()]);
 
   currentBoidBufferIndex = 1 - currentBoidBufferIndex;
   frameIndex += 1;
+
+  if (renderMode === 'heatmap') {
+    writeParams(dtSeconds);
+
+    const heatmapBindGroup = gpu.heatmapComputeBindGroups[currentBoidBufferIndex][currentHeatmapBufferIndex];
+    if (!heatmapBindGroup) {
+      throw new Error('Missing heatmap compute bind group.');
+    }
+
+    const heatPass = encoder.beginComputePass();
+    try {
+      heatPass.setPipeline(gpu.heatmapComputePipeline);
+      heatPass.setBindGroup(0, heatmapBindGroup);
+      heatPass.dispatchWorkgroups(Math.ceil(heatmapPointCount / HEATMAP_WORKGROUP_SIZE));
+    } finally {
+      heatPass.end();
+    }
+
+    currentHeatmapBufferIndex = 1 - currentHeatmapBufferIndex;
+  }
+
+  gpu.device.queue.submit([encoder.finish()]);
 }
 
 function renderFrame() {
@@ -972,7 +1119,7 @@ function renderFrame() {
   }
 
   const boidRenderBindGroup = gpu.boidRenderBindGroups[currentBoidBufferIndex];
-  const heatmapRenderBindGroup = gpu.boidHeatmapRenderBindGroups[currentBoidBufferIndex];
+  const heatmapRenderBindGroup = gpu.boidHeatmapRenderBindGroups[currentHeatmapBufferIndex];
   if (!boidRenderBindGroup || !heatmapRenderBindGroup) {
     throw new Error(`Missing render bind group for boid buffer index ${currentBoidBufferIndex}.`);
   }
@@ -995,7 +1142,7 @@ function renderFrame() {
     if (renderMode === 'heatmap') {
       renderPass.setPipeline(gpu.boidHeatmapRenderPipeline);
       renderPass.setBindGroup(0, heatmapRenderBindGroup);
-      renderPass.draw(6, BOID_COUNT, 0, 0);
+      renderPass.draw(6, heatmapPointCount, 0, 0);
     } else {
       renderPass.setPipeline(gpu.boidRenderPipeline);
       renderPass.setBindGroup(0, boidRenderBindGroup);
@@ -1102,6 +1249,7 @@ async function initWebGPU() {
 
   const boidBufferBytes = BOID_COUNT * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const predatorBufferBytes = PREDATOR_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const heatmapBufferBytes = HEATMAP_MAX_POINTS * 4 * Float32Array.BYTES_PER_ELEMENT;
   const paramsBufferBytes = 28 * Float32Array.BYTES_PER_ELEMENT;
   const caughtFlagsBytes = PREDATOR_COUNT * Uint32Array.BYTES_PER_ELEMENT;
 
@@ -1120,6 +1268,17 @@ async function initWebGPU() {
     size: predatorBufferBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
+
+  const heatmapBuffers = [
+    device.createBuffer({
+      size: heatmapBufferBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    }),
+    device.createBuffer({
+      size: heatmapBufferBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    }),
+  ];
 
   const caughtFlagsBuffer = device.createBuffer({
     size: caughtFlagsBytes,
@@ -1149,6 +1308,7 @@ async function initWebGPU() {
   const clearCaughtModule = await createCheckedShaderModule('catchClearShader', catchClearShader);
   const predatorResolveModule = await createCheckedShaderModule('predatorResolveShader', predatorResolveShader);
   const boidRenderModule = await createCheckedShaderModule('boidRenderShader', boidRenderShader);
+  const heatmapSampleComputeModule = await createCheckedShaderModule('heatmapSampleComputeShader', heatmapSampleComputeShader);
   const boidHeatmapRenderModule = await createCheckedShaderModule('boidHeatmapRenderShader', boidHeatmapRenderShader);
   const predatorRenderModule = await createCheckedShaderModule('predatorRenderShader', predatorRenderShader);
 
@@ -1184,6 +1344,14 @@ async function initWebGPU() {
     },
   });
 
+  const heatmapComputePipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: heatmapSampleComputeModule,
+      entryPoint: 'main',
+    },
+  });
+
   const boidRenderPipeline = device.createRenderPipeline({
     layout: 'auto',
     vertex: {
@@ -1215,13 +1383,13 @@ async function initWebGPU() {
           format,
           blend: {
             color: {
-              srcFactor: 'one',
-              dstFactor: 'one',
+              srcFactor: 'src-alpha',
+              dstFactor: 'one-minus-src-alpha',
               operation: 'add',
             },
             alpha: {
               srcFactor: 'one',
-              dstFactor: 'one',
+              dstFactor: 'one-minus-src-alpha',
               operation: 'add',
             },
           },
@@ -1293,6 +1461,49 @@ async function initWebGPU() {
     }),
   ];
 
+  const heatmapComputeBindGroups = [
+    [
+      device.createBindGroup({
+        layout: heatmapComputePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[0] } },
+          { binding: 1, resource: { buffer: heatmapBuffers[0] } },
+          { binding: 2, resource: { buffer: heatmapBuffers[1] } },
+          { binding: 3, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+      device.createBindGroup({
+        layout: heatmapComputePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[0] } },
+          { binding: 1, resource: { buffer: heatmapBuffers[1] } },
+          { binding: 2, resource: { buffer: heatmapBuffers[0] } },
+          { binding: 3, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+    ],
+    [
+      device.createBindGroup({
+        layout: heatmapComputePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[1] } },
+          { binding: 1, resource: { buffer: heatmapBuffers[0] } },
+          { binding: 2, resource: { buffer: heatmapBuffers[1] } },
+          { binding: 3, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+      device.createBindGroup({
+        layout: heatmapComputePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[1] } },
+          { binding: 1, resource: { buffer: heatmapBuffers[1] } },
+          { binding: 2, resource: { buffer: heatmapBuffers[0] } },
+          { binding: 3, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+    ],
+  ];
+
   const clearCaughtBindGroup = device.createBindGroup({
     layout: clearCaughtPipeline.getBindGroupLayout(0),
     entries: [
@@ -1331,14 +1542,14 @@ async function initWebGPU() {
     device.createBindGroup({
       layout: boidHeatmapRenderPipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: { buffer: boidBuffers[0] } },
+        { binding: 0, resource: { buffer: heatmapBuffers[0] } },
         { binding: 1, resource: { buffer: paramsBuffer } },
       ],
     }),
     device.createBindGroup({
       layout: boidHeatmapRenderPipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: { buffer: boidBuffers[1] } },
+        { binding: 0, resource: { buffer: heatmapBuffers[1] } },
         { binding: 1, resource: { buffer: paramsBuffer } },
       ],
     }),
@@ -1358,17 +1569,20 @@ async function initWebGPU() {
     format,
     boidBuffers,
     predatorBuffer,
+    heatmapBuffers,
     caughtFlagsBuffer,
     paramsBuffer,
     boidUpdatePipeline,
     predatorUpdatePipeline,
     clearCaughtPipeline,
     predatorResolvePipeline,
+    heatmapComputePipeline,
     boidRenderPipeline,
     boidHeatmapRenderPipeline,
     predatorRenderPipeline,
     boidUpdateBindGroups,
     predatorUpdateBindGroups,
+    heatmapComputeBindGroups,
     clearCaughtBindGroup,
     predatorResolveBindGroup,
     boidRenderBindGroups,
