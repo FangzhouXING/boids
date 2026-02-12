@@ -1090,25 +1090,23 @@ function stepSimulation(dtSeconds) {
   currentBoidBufferIndex = 1 - currentBoidBufferIndex;
   frameIndex += 1;
 
-  if (renderMode === 'heatmap') {
-    writeParams(dtSeconds);
+  writeParams(dtSeconds);
 
-    const heatmapBindGroup = gpu.heatmapComputeBindGroups[currentBoidBufferIndex][currentHeatmapBufferIndex];
-    if (!heatmapBindGroup) {
-      throw new Error('Missing heatmap compute bind group.');
-    }
-
-    const heatPass = encoder.beginComputePass();
-    try {
-      heatPass.setPipeline(gpu.heatmapComputePipeline);
-      heatPass.setBindGroup(0, heatmapBindGroup);
-      heatPass.dispatchWorkgroups(Math.ceil(heatmapPointCount / HEATMAP_WORKGROUP_SIZE));
-    } finally {
-      heatPass.end();
-    }
-
-    currentHeatmapBufferIndex = 1 - currentHeatmapBufferIndex;
+  const heatmapBindGroup = gpu.heatmapComputeBindGroups[currentBoidBufferIndex][currentHeatmapBufferIndex];
+  if (!heatmapBindGroup) {
+    throw new Error('Missing heatmap compute bind group.');
   }
+
+  const heatPass = encoder.beginComputePass();
+  try {
+    heatPass.setPipeline(gpu.heatmapComputePipeline);
+    heatPass.setBindGroup(0, heatmapBindGroup);
+    heatPass.dispatchWorkgroups(Math.ceil(heatmapPointCount / HEATMAP_WORKGROUP_SIZE));
+  } finally {
+    heatPass.end();
+  }
+
+  currentHeatmapBufferIndex = 1 - currentHeatmapBufferIndex;
 
   gpu.device.queue.submit([encoder.finish()]);
 }
