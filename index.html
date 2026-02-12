@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Boids Simulation</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Boids Simulation</h1>
+        <p>200 boids, fixed count.</p>
+      </header>
+
+      <section class="sim-layout">
+        <section class="canvas-wrap">
+          <canvas id="boidCanvas" width="960" height="560" aria-label="boids simulation canvas"></canvas>
+        </section>
+
+        <aside class="controls" aria-label="Simulation controls">
+          <section class="control-section" aria-label="Boid motion controls">
+            <h2 class="control-title">Boids</h2>
+            <p class="fixed-count">Count: <strong>200</strong> (fixed)</p>
+            <label class="control-group" for="turnAccelRange">
+              <span>Turn Accel: <strong id="turnAccelValue">720</strong> deg/s²</span>
+              <input id="turnAccelRange" type="range" min="120" max="2400" step="20" value="720" />
+            </label>
+            <label class="control-group" for="minSpeedRange">
+              <span>Min Speed: <strong id="minSpeedValue">0.45</strong></span>
+              <input id="minSpeedRange" type="range" min="0" max="1.6" step="0.05" value="0.45" />
+            </label>
+          </section>
+
+          <section class="control-section" aria-label="Predator controls">
+            <h2 class="control-title">Predators</h2>
+            <p class="fixed-count">Count: <strong>5</strong> (fixed)</p>
+            <label class="control-group" for="predatorAttentionRange">
+              <span>Attention: <strong id="predatorAttentionValue">3.0</strong> s</span>
+              <input id="predatorAttentionRange" type="range" min="0.5" max="8" step="0.1" value="3.0" />
+            </label>
+          </section>
+
+          <button id="restartButton" type="button">Reseed</button>
+        </aside>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
