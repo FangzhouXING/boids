@@ -10,7 +10,7 @@
     <main>
       <header>
         <h1>Boids Simulation</h1>
-        <p>4000 boids, fixed count.</p>
+        <p>10000 boids, fixed count.</p>
       </header>
 
       <section class="sim-layout">
@@ -21,7 +21,7 @@
         <aside class="controls" aria-label="Simulation controls">
           <section class="control-section" aria-label="Boid motion controls">
             <h2 class="control-title">Boids</h2>
-            <p class="fixed-count">Count: <strong>4000</strong> (fixed)</p>
+            <p class="fixed-count">Count: <strong>10000</strong> (fixed)</p>
             <label class="control-group" for="turnAccelRange">
               <span>Turn Accel: <strong id="turnAccelValue">720</strong> deg/s²</span>
               <input id="turnAccelRange" type="range" min="120" max="2400" step="20" value="720" />
@@ -30,6 +30,7 @@
               <span>Min Speed: <strong id="minSpeedValue">0.45</strong></span>
               <input id="minSpeedRange" type="range" min="0" max="1.6" step="0.05" value="0.45" />
             </label>
+            <button id="viewToggleButton" class="secondary" type="button" aria-pressed="false">View: Arrows</button>
           </section>
 
           <section class="control-section" aria-label="Predator controls">

@@ -113,6 +113,11 @@ button:hover {
   filter: brightness(1.05);
 }
 
+.secondary {
+  color: #d7e7ff;
+  background: linear-gradient(180deg, #2d4f78, #1b304f);
+}
+
 @media (max-width: 1020px) {
   .sim-layout {
     grid-template-columns: 1fr;

@@ -6,9 +6,10 @@ const minSpeedRange = document.getElementById('minSpeedRange');
 const minSpeedValue = document.getElementById('minSpeedValue');
 const predatorAttentionRange = document.getElementById('predatorAttentionRange');
 const predatorAttentionValue = document.getElementById('predatorAttentionValue');
+const viewToggleButton = document.getElementById('viewToggleButton');
 
 const FIXED_STEP = 1 / 60;
-const BOID_COUNT = 4000;
+const BOID_COUNT = 10000;
 const PREDATOR_COUNT = 5;
 const BOID_WORKGROUP_SIZE = 128;
 const CATCH_CLEAR_WORKGROUP_SIZE = 32;
@@ -47,6 +48,7 @@ let frameIndex = 0;
 let accumulator = 0;
 let lastFrameTime = 0;
 let currentBoidBufferIndex = 0;
+let renderMode = 'boids';
 let gpu = null;
 let gpuRuntimeError = false;
 let lastTextState = JSON.stringify({
@@ -656,6 +658,93 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
+const boidHeatmapRenderShader = `
+struct BoidState {
+  posVel: vec4f,
+  headingTurn: vec4f,
+};
+
+struct SimParams {
+  world: vec4f,
+  counts: vec4f,
+  boidA: vec4f,
+  boidB: vec4f,
+  boidC: vec4f,
+  predatorA: vec4f,
+  predatorB: vec4f,
+};
+
+struct VSOut {
+  @builtin(position) position: vec4f,
+  @location(0) radial: vec2f,
+};
+
+@group(0) @binding(0) var<storage, read> boids: array<BoidState>;
+@group(0) @binding(1) var<uniform> params: SimParams;
+
+fn quad_vertex(vertexIndex: u32) -> vec2f {
+  if (vertexIndex == 0u) {
+    return vec2f(-1.0, -1.0);
+  }
+  if (vertexIndex == 1u) {
+    return vec2f(1.0, -1.0);
+  }
+  if (vertexIndex == 2u) {
+    return vec2f(-1.0, 1.0);
+  }
+  if (vertexIndex == 3u) {
+    return vec2f(-1.0, 1.0);
+  }
+  if (vertexIndex == 4u) {
+    return vec2f(1.0, -1.0);
+  }
+  return vec2f(1.0, 1.0);
+}
+
+@vertex
+fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
+  let boid = boids[instanceIndex];
+  let radial = quad_vertex(vertexIndex);
+  let kernelRadius = 11.0;
+  let world = boid.posVel.xy + radial * kernelRadius;
+
+  let clipX = world.x / params.world.x * 2.0 - 1.0;
+  let clipY = 1.0 - world.y / params.world.y * 2.0;
+
+  var out: VSOut;
+  out.position = vec4f(clipX, clipY, 0.0, 1.0);
+  out.radial = radial;
+  return out;
+}
+
+@fragment
+fn fsMain(in: VSOut) -> @location(0) vec4f {
+  let distSq = dot(in.radial, in.radial);
+  if (distSq > 1.0) {
+    discard;
+  }
+
+  let core = exp(-distSq * 2.35);
+  let halo = exp(-distSq * 0.95);
+  let localDensity = core * 0.72 + halo * 0.28;
+  let contribution = localDensity * 0.082;
+
+  let dark = vec3f(0.005, 0.015, 0.055);
+  let low = vec3f(0.06, 0.25, 0.75);
+  let mid = vec3f(0.24, 0.72, 1.00);
+  let hot = vec3f(1.00, 0.86, 0.20);
+  let peak = vec3f(1.00, 1.00, 0.94);
+
+  let rampA = mix(dark, low, smoothstep(0.04, 0.32, localDensity));
+  let rampB = mix(low, mid, smoothstep(0.20, 0.62, localDensity));
+  let rampC = mix(mid, hot, smoothstep(0.52, 0.90, localDensity));
+  var color = mix(rampA, rampB, smoothstep(0.18, 0.58, localDensity));
+  color = mix(color, rampC, smoothstep(0.48, 0.88, localDensity));
+  color = mix(color, peak, smoothstep(0.90, 1.0, localDensity));
+  return vec4f(color * contribution, contribution);
+}
+`;
+
 const predatorRenderShader = `
 struct PredatorState {
   posVel: vec4f,
@@ -774,6 +863,7 @@ function updateTextState(mode = 'running') {
     boidCount: BOID_COUNT,
     predatorCount: PREDATOR_COUNT,
     frameIndex,
+    viewMode: renderMode,
     maxTurnAccelerationDegPerSec2: Number(turnAccelRange.value),
     minSpeed: Number(minSpeedRange.value),
     predatorAttentionSeconds: Number(predatorAttentionRange.value),
@@ -882,7 +972,8 @@ function renderFrame() {
   }
 
   const boidRenderBindGroup = gpu.boidRenderBindGroups[currentBoidBufferIndex];
-  if (!boidRenderBindGroup) {
+  const heatmapRenderBindGroup = gpu.boidHeatmapRenderBindGroups[currentBoidBufferIndex];
+  if (!boidRenderBindGroup || !heatmapRenderBindGroup) {
     throw new Error(`Missing render bind group for boid buffer index ${currentBoidBufferIndex}.`);
   }
 
@@ -901,13 +992,18 @@ function renderFrame() {
   });
 
   try {
-    renderPass.setPipeline(gpu.boidRenderPipeline);
-    renderPass.setBindGroup(0, boidRenderBindGroup);
-    renderPass.draw(3, BOID_COUNT, 0, 0);
-
-    renderPass.setPipeline(gpu.predatorRenderPipeline);
-    renderPass.setBindGroup(0, gpu.predatorRenderBindGroup);
-    renderPass.draw(3, PREDATOR_COUNT, 0, 0);
+    if (renderMode === 'heatmap') {
+      renderPass.setPipeline(gpu.boidHeatmapRenderPipeline);
+      renderPass.setBindGroup(0, heatmapRenderBindGroup);
+      renderPass.draw(6, BOID_COUNT, 0, 0);
+    } else {
+      renderPass.setPipeline(gpu.boidRenderPipeline);
+      renderPass.setBindGroup(0, boidRenderBindGroup);
+      renderPass.draw(3, BOID_COUNT, 0, 0);
+      renderPass.setPipeline(gpu.predatorRenderPipeline);
+      renderPass.setBindGroup(0, gpu.predatorRenderBindGroup);
+      renderPass.draw(3, PREDATOR_COUNT, 0, 0);
+    }
   } finally {
     renderPass.end();
   }
@@ -970,6 +1066,15 @@ function setHeaderStatus(text) {
   if (subtitle) {
     subtitle.textContent = text;
   }
+}
+
+function updateViewToggleLabel() {
+  if (!viewToggleButton) {
+    return;
+  }
+  const isHeatmap = renderMode === 'heatmap';
+  viewToggleButton.textContent = isHeatmap ? 'View: Heatmap' : 'View: Arrows';
+  viewToggleButton.setAttribute('aria-pressed', isHeatmap ? 'true' : 'false');
 }
 
 async function initWebGPU() {
@@ -1044,6 +1149,7 @@ async function initWebGPU() {
   const clearCaughtModule = await createCheckedShaderModule('catchClearShader', catchClearShader);
   const predatorResolveModule = await createCheckedShaderModule('predatorResolveShader', predatorResolveShader);
   const boidRenderModule = await createCheckedShaderModule('boidRenderShader', boidRenderShader);
+  const boidHeatmapRenderModule = await createCheckedShaderModule('boidHeatmapRenderShader', boidHeatmapRenderShader);
   const predatorRenderModule = await createCheckedShaderModule('predatorRenderShader', predatorRenderShader);
 
   const boidUpdatePipeline = device.createComputePipeline({
@@ -1088,6 +1194,39 @@ async function initWebGPU() {
       module: boidRenderModule,
       entryPoint: 'fsMain',
       targets: [{ format }],
+    },
+    primitive: {
+      topology: 'triangle-list',
+      cullMode: 'none',
+    },
+  });
+
+  const boidHeatmapRenderPipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: {
+      module: boidHeatmapRenderModule,
+      entryPoint: 'vsMain',
+    },
+    fragment: {
+      module: boidHeatmapRenderModule,
+      entryPoint: 'fsMain',
+      targets: [
+        {
+          format,
+          blend: {
+            color: {
+              srcFactor: 'one',
+              dstFactor: 'one',
+              operation: 'add',
+            },
+            alpha: {
+              srcFactor: 'one',
+              dstFactor: 'one',
+              operation: 'add',
+            },
+          },
+        },
+      ],
     },
     primitive: {
       topology: 'triangle-list',
@@ -1188,6 +1327,23 @@ async function initWebGPU() {
     }),
   ];
 
+  const boidHeatmapRenderBindGroups = [
+    device.createBindGroup({
+      layout: boidHeatmapRenderPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: boidBuffers[0] } },
+        { binding: 1, resource: { buffer: paramsBuffer } },
+      ],
+    }),
+    device.createBindGroup({
+      layout: boidHeatmapRenderPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: boidBuffers[1] } },
+        { binding: 1, resource: { buffer: paramsBuffer } },
+      ],
+    }),
+  ];
+
   const predatorRenderBindGroup = device.createBindGroup({
     layout: predatorRenderPipeline.getBindGroupLayout(0),
     entries: [
@@ -1209,12 +1365,14 @@ async function initWebGPU() {
     clearCaughtPipeline,
     predatorResolvePipeline,
     boidRenderPipeline,
+    boidHeatmapRenderPipeline,
     predatorRenderPipeline,
     boidUpdateBindGroups,
     predatorUpdateBindGroups,
     clearCaughtBindGroup,
     predatorResolveBindGroup,
     boidRenderBindGroups,
+    boidHeatmapRenderBindGroups,
     predatorRenderBindGroup,
   };
 
@@ -1249,6 +1407,12 @@ predatorAttentionRange.addEventListener('input', () => {
   config.predatorAttentionSeconds = Number(predatorAttentionRange.value);
 });
 
+viewToggleButton.addEventListener('click', () => {
+  renderMode = renderMode === 'boids' ? 'heatmap' : 'boids';
+  updateViewToggleLabel();
+  updateTextState();
+});
+
 restartButton.addEventListener('click', () => {
   reseedSimulation();
 });
@@ -1260,6 +1424,7 @@ window.advanceTime = advanceTime;
 turnAccelValue.textContent = turnAccelRange.value;
 minSpeedValue.textContent = Number(minSpeedRange.value).toFixed(2);
 predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(1);
+updateViewToggleLabel();
 
 resizeCanvas();
 updateTextState('initializing');
