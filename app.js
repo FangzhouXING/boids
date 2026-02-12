@@ -7,6 +7,18 @@ const minSpeedValue = document.getElementById('minSpeedValue');
 const predatorAttentionRange = document.getElementById('predatorAttentionRange');
 const predatorAttentionValue = document.getElementById('predatorAttentionValue');
 const viewToggleButton = document.getElementById('viewToggleButton');
+const heatmapSpacingRange = document.getElementById('heatmapSpacingRange');
+const heatmapSpacingValue = document.getElementById('heatmapSpacingValue');
+const heatmapDotRadiusRange = document.getElementById('heatmapDotRadiusRange');
+const heatmapDotRadiusValue = document.getElementById('heatmapDotRadiusValue');
+const heatmapDiffuseRange = document.getElementById('heatmapDiffuseRange');
+const heatmapDiffuseValue = document.getElementById('heatmapDiffuseValue');
+const heatmapSamplesRange = document.getElementById('heatmapSamplesRange');
+const heatmapSamplesValue = document.getElementById('heatmapSamplesValue');
+const heatmapTrendGainRange = document.getElementById('heatmapTrendGainRange');
+const heatmapTrendGainValue = document.getElementById('heatmapTrendGainValue');
+const heatmapTrendDeadbandRange = document.getElementById('heatmapTrendDeadbandRange');
+const heatmapTrendDeadbandValue = document.getElementById('heatmapTrendDeadbandValue');
 
 const FIXED_STEP = 1 / 60;
 const BOID_COUNT = 10000;
@@ -17,6 +29,11 @@ const HEATMAP_WORKGROUP_SIZE = 128;
 const BOID_FLOATS = 8;
 const PREDATOR_FLOATS = 12;
 const HEATMAP_DOT_SPACING = 6;
+const HEATMAP_DOT_RADIUS = 3;
+const HEATMAP_DIFFUSE_RADIUS = 17;
+const HEATMAP_SAMPLE_BUDGET = 320;
+const HEATMAP_TREND_GAIN = 4.2;
+const HEATMAP_TREND_DEADBAND = 0.045;
 const HEATMAP_MAX_POINTS = 65536;
 
 const config = {
@@ -42,6 +59,12 @@ const config = {
   predatorPostCatchPauseMaxSeconds: 0,
   predatorPauseSlowdownSeconds: 0,
   predatorAttentionSeconds: Number(predatorAttentionRange.value),
+  heatmapDotSpacingPx: Number(heatmapSpacingRange?.value || HEATMAP_DOT_SPACING),
+  heatmapDotRadiusPx: Number(heatmapDotRadiusRange?.value || HEATMAP_DOT_RADIUS),
+  heatmapDiffuseRadiusPx: Number(heatmapDiffuseRange?.value || HEATMAP_DIFFUSE_RADIUS),
+  heatmapSampleBudget: Number(heatmapSamplesRange?.value || HEATMAP_SAMPLE_BUDGET),
+  heatmapTrendGain: Number(heatmapTrendGainRange?.value || HEATMAP_TREND_GAIN),
+  heatmapTrendDeadband: Number(heatmapTrendDeadbandRange?.value || HEATMAP_TREND_DEADBAND),
 };
 
 let worldWidth = 960;
@@ -82,6 +105,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boidsIn: array<BoidState>;
@@ -349,6 +374,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boidsIn: array<BoidState>;
@@ -538,6 +565,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read_write> caughtFlags: array<atomic<u32>>;
@@ -568,6 +597,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read_write> predators: array<PredatorState>;
@@ -613,6 +644,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
 };
 
 struct VSOut {
@@ -676,6 +709,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
 };
 
 struct VSOut {
@@ -687,8 +722,6 @@ struct VSOut {
 
 @group(0) @binding(0) var<storage, read> heatSamples: array<HeatSample>;
 @group(0) @binding(1) var<uniform> params: SimParams;
-
-const DOT_RADIUS: f32 = 3.0;
 
 fn quad_vertex(vertexIndex: u32) -> vec2f {
   if (vertexIndex == 0u) {
@@ -713,14 +746,15 @@ fn quad_vertex(vertexIndex: u32) -> vec2f {
 fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
   let worldW = params.world.x;
   let worldH = params.world.y;
-  let dotSpacing = max(params.predatorB.x, 1.0);
+  let dotSpacing = max(params.heatmapA.x, 0.75);
+  let dotRadius = max(params.heatmapA.y, 0.5);
 
   let cols = max(1u, u32(floor(worldW / dotSpacing)));
   let sx = instanceIndex % cols;
   let sy = instanceIndex / cols;
   let center = vec2f((f32(sx) + 0.5) * dotSpacing, (f32(sy) + 0.5) * dotSpacing);
   let local = quad_vertex(vertexIndex);
-  let world = center + local * DOT_RADIUS;
+  let world = center + local * dotRadius;
 
   let density = max(0.0, heatSamples[instanceIndex].densityDelta.x);
   let trendSignal = heatSamples[instanceIndex].densityDelta.y;
@@ -775,6 +809,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boids: array<BoidState>;
@@ -782,12 +818,8 @@ struct SimParams {
 @group(0) @binding(2) var<storage, read_write> heatNext: array<HeatSample>;
 @group(0) @binding(3) var<uniform> params: SimParams;
 
-const DENSITY_RADIUS: f32 = 17.0;
-const DENSITY_RADIUS_SQ: f32 = DENSITY_RADIUS * DENSITY_RADIUS;
 const MIN_SAMPLES: u32 = 96u;
-const MAX_SAMPLES: u32 = 320u;
-const TREND_DEADBAND: f32 = 0.045;
-const TREND_GAIN: f32 = 4.2;
+const MAX_SAMPLES: u32 = 768u;
 
 fn wrapped_abs_delta(a: f32, b: f32, size: f32) -> f32 {
   let direct = abs(a - b);
@@ -816,7 +848,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let worldH = params.world.y;
   let boidCount = max(1u, u32(params.counts.x));
   let dt = params.world.z;
-  let dotSpacing = max(params.predatorB.x, 1.0);
+  let dotSpacing = max(params.heatmapA.x, 0.75);
+  let densityRadius = max(params.heatmapA.z, 2.0);
+  let densityRadiusSq = densityRadius * densityRadius;
+  let sampleBudget = clamp(u32(params.heatmapA.w), MIN_SAMPLES, MAX_SAMPLES);
+  let trendGain = max(params.heatmapB.x, 0.01);
+  let trendDeadband = max(params.heatmapB.y, 0.0);
 
   let cols = max(1u, u32(floor(worldW / dotSpacing)));
   let sx = idx % cols;
@@ -824,7 +861,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let samplePos = vec2f((f32(sx) + 0.5) * dotSpacing, (f32(sy) + 0.5) * dotSpacing);
 
   let adaptiveSamples = boidCount / 48u + 96u;
-  adaptiveSamples = clamp(adaptiveSamples, MIN_SAMPLES, MAX_SAMPLES);
+  adaptiveSamples = clamp(adaptiveSamples, MIN_SAMPLES, sampleBudget);
   let sampleBoids = min(boidCount, adaptiveSamples);
   let frameSeed = u32(params.counts.z);
   let baseSeed = hash_u32(idx * 747796405u + frameSeed * 1664525u + 19u);
@@ -840,8 +877,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let dx = wrapped_abs_delta(samplePos.x, boid.posVel.x, worldW);
     let dy = wrapped_abs_delta(samplePos.y, boid.posVel.y, worldH);
     let distSq = dx * dx + dy * dy;
-    if (distSq < DENSITY_RADIUS_SQ) {
-      density = density + exp(-distSq * 0.014);
+    if (distSq < densityRadiusSq) {
+      density = density + exp(-distSq / max(densityRadiusSq * 0.62, 0.0001));
     }
     boidIndex = (boidIndex + step) % boidCount;
   }
@@ -859,9 +896,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let smoothedDensity = fastDensity + (previousDensity - fastDensity) * 0.08;
 
   let trendRaw = fastDensity - slowDensity;
-  let trendMagnitude = max(0.0, abs(trendRaw) - TREND_DEADBAND);
+  let trendMagnitude = max(0.0, abs(trendRaw) - trendDeadband);
   let trendSigned = sign(trendRaw) * trendMagnitude;
-  let trendNormalized = clamp(trendSigned * TREND_GAIN, -1.0, 1.0);
+  let trendNormalized = clamp(trendSigned * trendGain, -1.0, 1.0);
   let smoothedTrend = previousTrend + (trendNormalized - previousTrend) * 0.18;
 
   heatNext[idx].densityDelta = vec4f(smoothedDensity, smoothedTrend, fastDensity, slowDensity);
@@ -883,6 +920,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
 };
 
 struct VSOut {
@@ -929,6 +968,18 @@ fn fsMain() -> @location(0) vec4f {
 
 function rand(min, max) {
   return min + Math.random() * (max - min);
+}
+
+function getHeatmapDotSpacingWorld() {
+  return Math.max(0.75, config.heatmapDotSpacingPx / devicePixelRatioCached);
+}
+
+function getHeatmapDotRadiusWorld() {
+  return Math.max(0.5, config.heatmapDotRadiusPx / devicePixelRatioCached);
+}
+
+function getHeatmapDiffuseRadiusWorld() {
+  return Math.max(2, config.heatmapDiffuseRadiusPx / devicePixelRatioCached);
 }
 
 function createInitialBoidData() {
@@ -988,6 +1039,12 @@ function updateTextState(mode = 'running') {
     frameIndex,
     viewMode: renderMode,
     heatmapPoints: heatmapPointCount,
+    heatmapDotSpacingPx: config.heatmapDotSpacingPx,
+    heatmapDotRadiusPx: config.heatmapDotRadiusPx,
+    heatmapDiffuseRadiusPx: config.heatmapDiffuseRadiusPx,
+    heatmapSampleBudget: config.heatmapSampleBudget,
+    heatmapTrendGain: config.heatmapTrendGain,
+    heatmapTrendDeadband: config.heatmapTrendDeadband,
     maxTurnAccelerationDegPerSec2: Number(turnAccelRange.value),
     minSpeed: Number(minSpeedRange.value),
     predatorAttentionSeconds: Number(predatorAttentionRange.value),
@@ -1001,7 +1058,7 @@ function resizeCanvas() {
   worldHeight = Math.max(1, Math.floor(rect.height));
   const dpr = Math.max(window.devicePixelRatio || 1, 1);
   devicePixelRatioCached = dpr;
-  const dotSpacingWorld = Math.max(1, HEATMAP_DOT_SPACING / dpr);
+  const dotSpacingWorld = getHeatmapDotSpacingWorld();
   const cols = Math.max(1, Math.floor(worldWidth / dotSpacingWorld));
   const rows = Math.max(1, Math.floor(worldHeight / dotSpacingWorld));
   heatmapPointCount = Math.min(cols * rows, HEATMAP_MAX_POINTS);
@@ -1021,8 +1078,9 @@ function createParamsArray(dtSeconds) {
     config.maxSpeed, config.minSpeed, config.maxForce, config.maxTurnRate,
     config.maxTurnAcceleration, config.alignWeight, config.cohesionWeight, config.separationWeight,
     config.predatorAvoidWeight, config.predatorAttentionSeconds, config.predatorSeparationRadius, config.predatorSeparationWeight,
-    Math.max(1, HEATMAP_DOT_SPACING / devicePixelRatioCached), config.predatorSpeedFactor,
-    predatorMaxTurnRate, predatorMaxTurnAcceleration,
+    config.predatorPauseSlowdownSeconds, config.predatorSpeedFactor, predatorMaxTurnRate, predatorMaxTurnAcceleration,
+    getHeatmapDotSpacingWorld(), getHeatmapDotRadiusWorld(), getHeatmapDiffuseRadiusWorld(), config.heatmapSampleBudget,
+    config.heatmapTrendGain, config.heatmapTrendDeadband, 0, 0,
   ]);
 }
 
@@ -1253,7 +1311,7 @@ async function initWebGPU() {
   const boidBufferBytes = BOID_COUNT * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const predatorBufferBytes = PREDATOR_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const heatmapBufferBytes = HEATMAP_MAX_POINTS * 4 * Float32Array.BYTES_PER_ELEMENT;
-  const paramsBufferBytes = 28 * Float32Array.BYTES_PER_ELEMENT;
+  const paramsBufferBytes = 36 * Float32Array.BYTES_PER_ELEMENT;
   const caughtFlagsBytes = PREDATOR_COUNT * Uint32Array.BYTES_PER_ELEMENT;
 
   const boidBuffers = [
@@ -1609,6 +1667,15 @@ function handleResize() {
   }
 }
 
+function updateHeatmapControlLabels() {
+  heatmapSpacingValue.textContent = config.heatmapDotSpacingPx.toFixed(1);
+  heatmapDotRadiusValue.textContent = config.heatmapDotRadiusPx.toFixed(2);
+  heatmapDiffuseValue.textContent = config.heatmapDiffuseRadiusPx.toFixed(0);
+  heatmapSamplesValue.textContent = config.heatmapSampleBudget.toFixed(0);
+  heatmapTrendGainValue.textContent = config.heatmapTrendGain.toFixed(1);
+  heatmapTrendDeadbandValue.textContent = config.heatmapTrendDeadband.toFixed(3);
+}
+
 turnAccelRange.addEventListener('input', () => {
   turnAccelValue.textContent = turnAccelRange.value;
   config.maxTurnAcceleration = (Number(turnAccelRange.value) * Math.PI) / 180;
@@ -1622,6 +1689,37 @@ minSpeedRange.addEventListener('input', () => {
 predatorAttentionRange.addEventListener('input', () => {
   predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(1);
   config.predatorAttentionSeconds = Number(predatorAttentionRange.value);
+});
+
+heatmapSpacingRange.addEventListener('input', () => {
+  config.heatmapDotSpacingPx = Number(heatmapSpacingRange.value);
+  updateHeatmapControlLabels();
+  handleResize();
+});
+
+heatmapDotRadiusRange.addEventListener('input', () => {
+  config.heatmapDotRadiusPx = Number(heatmapDotRadiusRange.value);
+  updateHeatmapControlLabels();
+});
+
+heatmapDiffuseRange.addEventListener('input', () => {
+  config.heatmapDiffuseRadiusPx = Number(heatmapDiffuseRange.value);
+  updateHeatmapControlLabels();
+});
+
+heatmapSamplesRange.addEventListener('input', () => {
+  config.heatmapSampleBudget = Number(heatmapSamplesRange.value);
+  updateHeatmapControlLabels();
+});
+
+heatmapTrendGainRange.addEventListener('input', () => {
+  config.heatmapTrendGain = Number(heatmapTrendGainRange.value);
+  updateHeatmapControlLabels();
+});
+
+heatmapTrendDeadbandRange.addEventListener('input', () => {
+  config.heatmapTrendDeadband = Number(heatmapTrendDeadbandRange.value);
+  updateHeatmapControlLabels();
 });
 
 viewToggleButton.addEventListener('click', () => {
@@ -1641,6 +1739,7 @@ window.advanceTime = advanceTime;
 turnAccelValue.textContent = turnAccelRange.value;
 minSpeedValue.textContent = Number(minSpeedRange.value).toFixed(2);
 predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(1);
+updateHeatmapControlLabels();
 updateViewToggleLabel();
 
 resizeCanvas();

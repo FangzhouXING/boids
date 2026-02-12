@@ -94,8 +94,7 @@ canvas {
   gap: 0.25rem;
 }
 
-#turnAccelRange,
-#minSpeedRange {
+.controls input[type="range"] {
   width: 100%;
 }
 
