@@ -785,7 +785,8 @@ struct SimParams {
 const DOT_SPACING: f32 = ${HEATMAP_DOT_SPACING.toFixed(1)};
 const DENSITY_RADIUS: f32 = 17.0;
 const DENSITY_RADIUS_SQ: f32 = DENSITY_RADIUS * DENSITY_RADIUS;
-const MAX_SAMPLES: u32 = 224u;
+const MIN_SAMPLES: u32 = 96u;
+const MAX_SAMPLES: u32 = 320u;
 const TREND_DEADBAND: f32 = 0.045;
 const TREND_GAIN: f32 = 4.2;
 
@@ -822,8 +823,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let sy = idx / cols;
   let samplePos = vec2f((f32(sx) + 0.5) * DOT_SPACING, (f32(sy) + 0.5) * DOT_SPACING);
 
-  let sampleBoids = min(boidCount, MAX_SAMPLES);
-  let baseSeed = hash_u32(idx * 747796405u + 19u);
+  let adaptiveSamples = boidCount / 48u + 96u;
+  adaptiveSamples = clamp(adaptiveSamples, MIN_SAMPLES, MAX_SAMPLES);
+  let sampleBoids = min(boidCount, adaptiveSamples);
+  let frameSeed = u32(params.counts.z);
+  let baseSeed = hash_u32(idx * 747796405u + frameSeed * 1664525u + 19u);
   var boidIndex = baseSeed % boidCount;
   var step = 1u;
   if (boidCount > 1u) {
