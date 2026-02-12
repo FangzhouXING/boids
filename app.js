@@ -37,9 +37,9 @@ const PREDATOR_FLOATS = 12;
 const GRID_CELL_SIZE = 72;
 const GRID_MAX_CELLS = 2048;
 const GRID_CELL_CAPACITY = 256;
-const HEATMAP_DOT_SPACING = 6;
-const HEATMAP_DOT_RADIUS = 3;
-const HEATMAP_DIFFUSE_RADIUS = 17;
+const HEATMAP_DOT_SPACING = 5;
+const HEATMAP_DOT_RADIUS = 3.5;
+const HEATMAP_DIFFUSE_RADIUS = 22;
 const HEATMAP_SAMPLE_BUDGET = 320;
 const HEATMAP_TREND_GAIN = 4.2;
 const HEATMAP_TREND_DEADBAND = 0.045;
@@ -876,15 +876,16 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) inst
 
   let density = max(0.0, heatSamples[instanceIndex].densityDelta.x);
   let trendSignal = heatSamples[instanceIndex].densityDelta.y;
-  let intensity = 1.0 - exp(-density * 0.055);
+  let intensity = 1.0 - exp(-density * 0.09);
   let trend = clamp(trendSignal, -1.0, 1.0);
+  let lift = smoothstep(0.0, 0.78, intensity);
 
-  let dark = vec3f(0.005, 0.015, 0.05);
+  let dark = vec3f(0.03, 0.06, 0.17);
   let neutral = vec3f(0.62, 0.64, 0.68);
   let up = vec3f(1.00, 0.20, 0.14);
   let down = vec3f(0.18, 0.46, 1.00);
   let hue = select(mix(neutral, down, -trend), mix(neutral, up, trend), trend >= 0.0);
-  let color = mix(dark, hue, smoothstep(0.02, 0.95, intensity));
+  let color = mix(dark, hue, 0.22 + 0.78 * lift);
 
   let clipX = world.x / worldW * 2.0 - 1.0;
   let clipY = 1.0 - world.y / worldH * 2.0;
@@ -893,7 +894,7 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) inst
   out.position = vec4f(clipX, clipY, 0.0, 1.0);
   out.local = local;
   out.color = color;
-  out.alpha = smoothstep(0.03, 1.0, intensity);
+  out.alpha = 0.11 + 0.89 * smoothstep(0.0, 1.0, intensity);
   return out;
 }
 
@@ -904,7 +905,7 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
     discard;
   }
   let edge = 1.0 - smoothstep(0.65, 1.0, distSq);
-  let alpha = in.alpha * edge;
+  let alpha = in.alpha * (0.42 + 0.58 * edge);
   return vec4f(in.color * alpha, alpha);
 }
 `;
