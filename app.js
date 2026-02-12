@@ -31,8 +31,12 @@ const PREDATOR_COUNT = 5;
 const BOID_WORKGROUP_SIZE = 128;
 const CATCH_CLEAR_WORKGROUP_SIZE = 32;
 const HEATMAP_WORKGROUP_SIZE = 128;
+const GRID_WORKGROUP_SIZE = 128;
 const BOID_FLOATS = 8;
 const PREDATOR_FLOATS = 12;
+const GRID_CELL_SIZE = 72;
+const GRID_MAX_CELLS = 2048;
+const GRID_CELL_CAPACITY = 256;
 const HEATMAP_DOT_SPACING = 6;
 const HEATMAP_DOT_RADIUS = 3;
 const HEATMAP_DIFFUSE_RADIUS = 17;
@@ -126,10 +130,15 @@ struct SimParams {
 @group(0) @binding(0) var<storage, read> boidsIn: array<BoidState>;
 @group(0) @binding(1) var<storage, read_write> boidsOut: array<BoidState>;
 @group(0) @binding(2) var<storage, read> predators: array<PredatorState>;
-@group(0) @binding(3) var<storage, read_write> caughtFlags: array<atomic<u32>>;
-@group(0) @binding(4) var<uniform> params: SimParams;
+@group(0) @binding(3) var<storage, read_write> cellCounts: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read> cellBoids: array<u32>;
+@group(0) @binding(5) var<storage, read_write> caughtFlags: array<atomic<u32>>;
+@group(0) @binding(6) var<uniform> params: SimParams;
 
 const TAU: f32 = 6.28318530718;
+const GRID_CELL_SIZE: f32 = ${GRID_CELL_SIZE.toFixed(1)};
+const GRID_MAX_CELLS: u32 = ${GRID_MAX_CELLS}u;
+const GRID_CELL_CAPACITY: u32 = ${GRID_CELL_CAPACITY}u;
 
 fn wrap_coordinate(value: f32, size: f32) -> f32 {
   var result = value;
@@ -151,6 +160,14 @@ fn wrapped_delta(srcValue: f32, dstValue: f32, size: f32) -> f32 {
     delta = delta + size;
   }
   return delta;
+}
+
+fn wrap_index(value: i32, size: i32) -> u32 {
+  var v = value % size;
+  if (v < 0) {
+    v = v + size;
+  }
+  return u32(v);
 }
 
 fn limit_magnitude(v: vec2f, maxLen: f32) -> vec2f {
@@ -213,6 +230,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let worldH = params.world.y;
   let dt = params.world.z;
   let frameScale = params.world.w;
+  let cols = max(1u, u32(ceil(worldW / GRID_CELL_SIZE)));
+  let rows = max(1u, u32(ceil(worldH / GRID_CELL_SIZE)));
+  let gridCellCount = min(GRID_MAX_CELLS, cols * rows);
 
   let perceptionSq = params.boidA.x * params.boidA.x;
   let separationSq = params.boidA.y * params.boidA.y;
@@ -234,34 +254,50 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var me = boidsIn[index];
   let mePos = me.posVel.xy;
   let meVel = me.posVel.zw;
+  let meCellX = i32(min(cols - 1u, u32(floor(mePos.x / GRID_CELL_SIZE))));
+  let meCellY = i32(min(rows - 1u, u32(floor(mePos.y / GRID_CELL_SIZE))));
+  let cellRange = i32(max(1.0, ceil(params.boidA.x / GRID_CELL_SIZE)));
 
   var align = vec2f(0.0, 0.0);
   var cohesion = vec2f(0.0, 0.0);
   var separation = vec2f(0.0, 0.0);
   var neighbors = 0u;
 
-  for (var j: u32 = 0u; j < boidCount; j = j + 1u) {
-    if (j == index) {
-      continue;
-    }
+  for (var oy: i32 = -cellRange; oy <= cellRange; oy = oy + 1) {
+    let ny = wrap_index(meCellY + oy, i32(rows));
+    for (var ox: i32 = -cellRange; ox <= cellRange; ox = ox + 1) {
+      let nx = wrap_index(meCellX + ox, i32(cols));
+      let cellIndex = ny * cols + nx;
+      if (cellIndex >= gridCellCount) {
+        continue;
+      }
 
-    let other = boidsIn[j];
-    let dx = wrapped_delta(mePos.x, other.posVel.x, worldW);
-    let dy = wrapped_delta(mePos.y, other.posVel.y, worldH);
-    let delta = vec2f(dx, dy);
-    let distSq = dot(delta, delta);
+      let count = min(atomicLoad(&cellCounts[cellIndex]), GRID_CELL_CAPACITY);
+      for (var n: u32 = 0u; n < count; n = n + 1u) {
+        let j = cellBoids[cellIndex * GRID_CELL_CAPACITY + n];
+        if (j == index || j >= boidCount) {
+          continue;
+        }
 
-    if (distSq <= 0.0 || distSq > perceptionSq) {
-      continue;
-    }
+        let other = boidsIn[j];
+        let dx = wrapped_delta(mePos.x, other.posVel.x, worldW);
+        let dy = wrapped_delta(mePos.y, other.posVel.y, worldH);
+        let delta = vec2f(dx, dy);
+        let distSq = dot(delta, delta);
 
-    neighbors = neighbors + 1u;
-    align = align + other.posVel.zw;
-    cohesion = cohesion + delta;
+        if (distSq <= 0.0 || distSq > perceptionSq) {
+          continue;
+        }
 
-    if (distSq < separationSq) {
-      let invDist = inverseSqrt(max(distSq, 0.0001));
-      separation = separation - delta * invDist;
+        neighbors = neighbors + 1u;
+        align = align + other.posVel.zw;
+        cohesion = cohesion + delta;
+
+        if (distSq < separationSq) {
+          let invDist = inverseSqrt(max(distSq, 0.0001));
+          separation = separation - delta * invDist;
+        }
+      }
     }
   }
 
@@ -566,6 +602,74 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     pred.aux.z = f32(targetIndex);
 
     predators[p] = pred;
+  }
+}
+`;
+
+const gridClearShader = `
+@group(0) @binding(0) var<storage, read_write> cellCounts: array<atomic<u32>>;
+
+@compute @workgroup_size(${GRID_WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  if (gid.x >= ${GRID_MAX_CELLS}u) {
+    return;
+  }
+  atomicStore(&cellCounts[gid.x], 0u);
+}
+`;
+
+const gridBuildShader = `
+struct BoidState {
+  posVel: vec4f,
+  headingTurn: vec4f,
+};
+
+struct SimParams {
+  world: vec4f,
+  counts: vec4f,
+  boidA: vec4f,
+  boidB: vec4f,
+  boidC: vec4f,
+  predatorA: vec4f,
+  predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
+};
+
+@group(0) @binding(0) var<storage, read> boids: array<BoidState>;
+@group(0) @binding(1) var<storage, read_write> cellCounts: array<atomic<u32>>;
+@group(0) @binding(2) var<storage, read_write> cellBoids: array<u32>;
+@group(0) @binding(3) var<uniform> params: SimParams;
+
+const GRID_CELL_SIZE: f32 = ${GRID_CELL_SIZE.toFixed(1)};
+const GRID_MAX_CELLS: u32 = ${GRID_MAX_CELLS}u;
+const GRID_CELL_CAPACITY: u32 = ${GRID_CELL_CAPACITY}u;
+
+@compute @workgroup_size(${BOID_WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let boidCount = u32(params.counts.x);
+  let index = gid.x;
+  if (index >= boidCount) {
+    return;
+  }
+
+  let worldW = max(params.world.x, 1.0);
+  let worldH = max(params.world.y, 1.0);
+  let cols = max(1u, u32(ceil(worldW / GRID_CELL_SIZE)));
+  let rows = max(1u, u32(ceil(worldH / GRID_CELL_SIZE)));
+  let cellCount = min(GRID_MAX_CELLS, cols * rows);
+  if (cellCount == 0u) {
+    return;
+  }
+
+  let boid = boids[index];
+  let cx = min(cols - 1u, u32(floor(boid.posVel.x / GRID_CELL_SIZE)));
+  let cy = min(rows - 1u, u32(floor(boid.posVel.y / GRID_CELL_SIZE)));
+  let rawCellIndex = cy * cols + cx;
+  let cellIndex = min(rawCellIndex, cellCount - 1u);
+  let slot = atomicAdd(&cellCounts[cellIndex], 1u);
+  if (slot < GRID_CELL_CAPACITY) {
+    cellBoids[cellIndex * GRID_CELL_CAPACITY + slot] = index;
   }
 }
 `;
@@ -1046,6 +1150,7 @@ function updateTextState(mode = 'running') {
   lastTextState = JSON.stringify({
     mode,
     renderer: 'webgpu',
+    boidNeighborSearch: 'uniform-grid',
     coordinateSystem: 'origin top-left, +x right, +y down',
     viewport: { width: worldWidth, height: worldHeight },
     boidCount: BOID_COUNT,
@@ -1059,6 +1164,9 @@ function updateTextState(mode = 'running') {
     heatmapSampleBudget: config.heatmapSampleBudget,
     heatmapTrendGain: config.heatmapTrendGain,
     heatmapTrendDeadband: config.heatmapTrendDeadband,
+    gridCellSize: GRID_CELL_SIZE,
+    gridMaxCells: GRID_MAX_CELLS,
+    gridCellCapacity: GRID_CELL_CAPACITY,
     maxTurnAccelerationDegPerSec2: Number(turnAccelRange.value),
     minSpeed: Number(minSpeedRange.value),
     predatorAttentionSeconds: Number(predatorAttentionRange.value),
@@ -1111,12 +1219,14 @@ function reseedSimulation() {
   const boidData = createInitialBoidData();
   const predatorData = createInitialPredatorData();
   const zeroFlags = new Uint32Array(PREDATOR_COUNT);
+  const zeroGridCounts = new Uint32Array(GRID_MAX_CELLS);
   const zeroHeat = new Float32Array(HEATMAP_MAX_POINTS * 4);
 
   gpu.device.queue.writeBuffer(gpu.boidBuffers[0], 0, boidData);
   gpu.device.queue.writeBuffer(gpu.boidBuffers[1], 0, boidData);
   gpu.device.queue.writeBuffer(gpu.predatorBuffer, 0, predatorData);
   gpu.device.queue.writeBuffer(gpu.caughtFlagsBuffer, 0, zeroFlags);
+  gpu.device.queue.writeBuffer(gpu.gridCellCountBuffer, 0, zeroGridCounts);
   gpu.device.queue.writeBuffer(gpu.heatmapBuffers[0], 0, zeroHeat);
   gpu.device.queue.writeBuffer(gpu.heatmapBuffers[1], 0, zeroHeat);
 
@@ -1137,7 +1247,8 @@ function stepSimulation(dtSeconds) {
 
   const boidUpdateBindGroup = gpu.boidUpdateBindGroups[currentBoidBufferIndex];
   const predatorUpdateBindGroup = gpu.predatorUpdateBindGroups[currentBoidBufferIndex];
-  if (!boidUpdateBindGroup || !predatorUpdateBindGroup) {
+  const gridBuildBindGroup = gpu.gridBuildBindGroups[currentBoidBufferIndex];
+  if (!boidUpdateBindGroup || !predatorUpdateBindGroup || !gridBuildBindGroup) {
     throw new Error(`Missing compute bind group for boid buffer index ${currentBoidBufferIndex}.`);
   }
 
@@ -1150,6 +1261,14 @@ function stepSimulation(dtSeconds) {
     simPass.setPipeline(gpu.clearCaughtPipeline);
     simPass.setBindGroup(0, gpu.clearCaughtBindGroup);
     simPass.dispatchWorkgroups(Math.ceil(PREDATOR_COUNT / CATCH_CLEAR_WORKGROUP_SIZE));
+
+    simPass.setPipeline(gpu.gridClearPipeline);
+    simPass.setBindGroup(0, gpu.gridClearBindGroup);
+    simPass.dispatchWorkgroups(Math.ceil(GRID_MAX_CELLS / GRID_WORKGROUP_SIZE));
+
+    simPass.setPipeline(gpu.gridBuildPipeline);
+    simPass.setBindGroup(0, gridBuildBindGroup);
+    simPass.dispatchWorkgroups(Math.ceil(BOID_COUNT / BOID_WORKGROUP_SIZE));
 
     simPass.setPipeline(gpu.predatorUpdatePipeline);
     simPass.setBindGroup(0, predatorUpdateBindGroup);
@@ -1365,6 +1484,8 @@ async function initWebGPU() {
   const boidBufferBytes = BOID_COUNT * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const predatorBufferBytes = PREDATOR_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const heatmapBufferBytes = HEATMAP_MAX_POINTS * 4 * Float32Array.BYTES_PER_ELEMENT;
+  const gridCellCountBytes = GRID_MAX_CELLS * Uint32Array.BYTES_PER_ELEMENT;
+  const gridBoidIndexBytes = GRID_MAX_CELLS * GRID_CELL_CAPACITY * Uint32Array.BYTES_PER_ELEMENT;
   const paramsBufferBytes = 36 * Float32Array.BYTES_PER_ELEMENT;
   const caughtFlagsBytes = PREDATOR_COUNT * Uint32Array.BYTES_PER_ELEMENT;
 
@@ -1395,6 +1516,16 @@ async function initWebGPU() {
     }),
   ];
 
+  const gridCellCountBuffer = device.createBuffer({
+    size: gridCellCountBytes,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
+  const gridBoidIndexBuffer = device.createBuffer({
+    size: gridBoidIndexBytes,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
   const caughtFlagsBuffer = device.createBuffer({
     size: caughtFlagsBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -1420,6 +1551,8 @@ async function initWebGPU() {
 
   const boidUpdateModule = await createCheckedShaderModule('boidUpdateShader', boidUpdateShader);
   const predatorUpdateModule = await createCheckedShaderModule('predatorUpdateShader', predatorUpdateShader);
+  const gridClearModule = await createCheckedShaderModule('gridClearShader', gridClearShader);
+  const gridBuildModule = await createCheckedShaderModule('gridBuildShader', gridBuildShader);
   const clearCaughtModule = await createCheckedShaderModule('catchClearShader', catchClearShader);
   const predatorResolveModule = await createCheckedShaderModule('predatorResolveShader', predatorResolveShader);
   const boidRenderModule = await createCheckedShaderModule('boidRenderShader', boidRenderShader);
@@ -1439,6 +1572,22 @@ async function initWebGPU() {
     layout: 'auto',
     compute: {
       module: predatorUpdateModule,
+      entryPoint: 'main',
+    },
+  });
+
+  const gridClearPipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: gridClearModule,
+      entryPoint: 'main',
+    },
+  });
+
+  const gridBuildPipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: gridBuildModule,
       entryPoint: 'main',
     },
   });
@@ -1541,8 +1690,10 @@ async function initWebGPU() {
         { binding: 0, resource: { buffer: boidBuffers[0] } },
         { binding: 1, resource: { buffer: boidBuffers[1] } },
         { binding: 2, resource: { buffer: predatorBuffer } },
-        { binding: 3, resource: { buffer: caughtFlagsBuffer } },
-        { binding: 4, resource: { buffer: paramsBuffer } },
+        { binding: 3, resource: { buffer: gridCellCountBuffer } },
+        { binding: 4, resource: { buffer: gridBoidIndexBuffer } },
+        { binding: 5, resource: { buffer: caughtFlagsBuffer } },
+        { binding: 6, resource: { buffer: paramsBuffer } },
       ],
     }),
     device.createBindGroup({
@@ -1551,8 +1702,10 @@ async function initWebGPU() {
         { binding: 0, resource: { buffer: boidBuffers[1] } },
         { binding: 1, resource: { buffer: boidBuffers[0] } },
         { binding: 2, resource: { buffer: predatorBuffer } },
-        { binding: 3, resource: { buffer: caughtFlagsBuffer } },
-        { binding: 4, resource: { buffer: paramsBuffer } },
+        { binding: 3, resource: { buffer: gridCellCountBuffer } },
+        { binding: 4, resource: { buffer: gridBoidIndexBuffer } },
+        { binding: 5, resource: { buffer: caughtFlagsBuffer } },
+        { binding: 6, resource: { buffer: paramsBuffer } },
       ],
     }),
   ];
@@ -1572,6 +1725,32 @@ async function initWebGPU() {
         { binding: 0, resource: { buffer: boidBuffers[1] } },
         { binding: 1, resource: { buffer: predatorBuffer } },
         { binding: 2, resource: { buffer: paramsBuffer } },
+      ],
+    }),
+  ];
+
+  const gridClearBindGroup = device.createBindGroup({
+    layout: gridClearPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: { buffer: gridCellCountBuffer } }],
+  });
+
+  const gridBuildBindGroups = [
+    device.createBindGroup({
+      layout: gridBuildPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: boidBuffers[0] } },
+        { binding: 1, resource: { buffer: gridCellCountBuffer } },
+        { binding: 2, resource: { buffer: gridBoidIndexBuffer } },
+        { binding: 3, resource: { buffer: paramsBuffer } },
+      ],
+    }),
+    device.createBindGroup({
+      layout: gridBuildPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: boidBuffers[1] } },
+        { binding: 1, resource: { buffer: gridCellCountBuffer } },
+        { binding: 2, resource: { buffer: gridBoidIndexBuffer } },
+        { binding: 3, resource: { buffer: paramsBuffer } },
       ],
     }),
   ];
@@ -1685,10 +1864,14 @@ async function initWebGPU() {
     boidBuffers,
     predatorBuffer,
     heatmapBuffers,
+    gridCellCountBuffer,
+    gridBoidIndexBuffer,
     caughtFlagsBuffer,
     paramsBuffer,
     boidUpdatePipeline,
     predatorUpdatePipeline,
+    gridClearPipeline,
+    gridBuildPipeline,
     clearCaughtPipeline,
     predatorResolvePipeline,
     heatmapComputePipeline,
@@ -1697,6 +1880,8 @@ async function initWebGPU() {
     predatorRenderPipeline,
     boidUpdateBindGroups,
     predatorUpdateBindGroups,
+    gridClearBindGroup,
+    gridBuildBindGroups,
     heatmapComputeBindGroups,
     clearCaughtBindGroup,
     predatorResolveBindGroup,
