@@ -978,8 +978,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let sy = idx / cols;
   let samplePos = vec2f((f32(sx) + 0.5) * dotSpacing, (f32(sy) + 0.5) * dotSpacing);
 
-  let adaptiveSamples = boidCount / 48u + 96u;
-  adaptiveSamples = clamp(adaptiveSamples, MIN_SAMPLES, sampleBudget);
+  let adaptiveSamples = clamp(boidCount / 48u + 96u, MIN_SAMPLES, sampleBudget);
   let sampleBoids = min(boidCount, adaptiveSamples);
   let frameSeed = u32(params.counts.z);
   let baseSeed = hash_u32(idx * 747796405u + frameSeed * 1664525u + 19u);
