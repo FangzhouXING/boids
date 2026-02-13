@@ -194,17 +194,17 @@ fn wrap_index(value: i32, size: i32) -> u32 {
   return u32(v);
 }
 
-fn read_pheromone_sample(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec2f {
+fn read_pheromone_sample(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec4f {
   if (cols == 0u || rows == 0u || sampleCount == 0u) {
-    return vec2f(0.0, 0.0);
+    return vec4f(0.0, 0.0, 0.0, 0.0);
   }
   let sx = wrap_index(x, i32(cols));
   let sy = wrap_index(y, i32(rows));
   let idx = sy * cols + sx;
   if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
-    return vec2f(0.0, 0.0);
+    return vec4f(0.0, 0.0, 0.0, 0.0);
   }
-  return pheromones[idx].values.xy;
+  return pheromones[idx].values;
 }
 
 fn limit_magnitude(v: vec2f, maxLen: f32) -> vec2f {
@@ -317,7 +317,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let pherUp = read_pheromone_sample(pherX, pherY - 1, pherCols, pherRows, pherCount);
   let trailGradient = vec2f(pherRight.x - pherLeft.x, pherDown.x - pherUp.x);
   let fearGradient = vec2f(pherRight.y - pherLeft.y, pherDown.y - pherUp.y);
-  var panic = clamp(pherCenter.y * panicBoost, 0.0, 1.0);
+  let foodGradient = vec2f(pherRight.z - pherLeft.z, pherDown.z - pherUp.z);
+  let hazardGradient = vec2f(pherRight.w - pherLeft.w, pherDown.w - pherUp.w);
+  var panic = clamp((pherCenter.y + pherCenter.w * 0.65) * panicBoost, 0.0, 1.0);
+  let fieldFoodWeight = 0.82;
+  let fieldHazardWeight = 1.28;
 
   let seasonalPhase = 0.5 + 0.5 * sin(simTime * 0.19);
   let socialPulse = 0.5 + 0.5 * sin(simTime * 0.31 + f32(index) * 0.002);
@@ -434,6 +438,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     desiredVel = desiredVel + fearSteer * fearWeight;
   }
 
+  if (dot(foodGradient, foodGradient) > 0.000001) {
+    let foodSteer = steer_towards(meVel, foodGradient, maxSpeed, maxForce * 0.95);
+    desiredVel = desiredVel + foodSteer * fieldFoodWeight * (1.0 - panic * 0.35);
+  }
+
+  if (dot(hazardGradient, hazardGradient) > 0.000001) {
+    let hazardSteer = steer_towards(meVel, -hazardGradient, maxSpeed, maxForce * 2.0);
+    desiredVel = desiredVel + hazardSteer * fieldHazardWeight;
+    panic = max(panic, clamp(length(hazardGradient) * 0.22, 0.0, 1.0));
+  }
+
   if (panic > 0.2) {
     let panicDrift = vec2f(
       cos(simTime * 1.75 + f32(index) * 0.017),
@@ -456,11 +471,53 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let maxRateDelta = maxTurnAcceleration * dt;
   var nextTurnRate = currentTurnRate + clamp(turnRateError, -maxRateDelta, maxRateDelta);
   nextTurnRate = clamp(nextTurnRate, -maxTurnRate, maxTurnRate);
-  let nextHeading = normalize_angle(currentHeading + nextTurnRate * dt);
+  var nextHeading = normalize_angle(currentHeading + nextTurnRate * dt);
 
-  let nextVel = vec2f(cos(nextHeading), sin(nextHeading)) * speed;
+  var nextVel = vec2f(cos(nextHeading), sin(nextHeading)) * speed;
   var nextPos = mePos + nextVel * frameScale;
   nextPos = vec2f(wrap_coordinate(nextPos.x, worldW), wrap_coordinate(nextPos.y, worldH));
+
+  let portalPhase = simTime * 0.27;
+  let portalRadius = 18.0;
+  let portalRadiusSq = portalRadius * portalRadius;
+  let portalA = vec2f(
+    (0.5 + 0.37 * sin(portalPhase + 0.4)) * worldW,
+    (0.5 + 0.31 * cos(portalPhase * 1.17 - 0.7)) * worldH,
+  );
+  let portalB = vec2f(
+    (0.5 + 0.35 * sin(portalPhase + 3.14159)) * worldW,
+    (0.5 + 0.29 * cos(portalPhase * 1.19 + 2.2)) * worldH,
+  );
+  let portalDeltaA = vec2f(
+    wrapped_delta(nextPos.x, portalA.x, worldW),
+    wrapped_delta(nextPos.y, portalA.y, worldH),
+  );
+  let portalDeltaB = vec2f(
+    wrapped_delta(nextPos.x, portalB.x, worldW),
+    wrapped_delta(nextPos.y, portalB.y, worldH),
+  );
+  let enterA = dot(portalDeltaA, portalDeltaA) < portalRadiusSq;
+  let enterB = dot(portalDeltaB, portalDeltaB) < portalRadiusSq;
+  if (enterA || enterB) {
+    let gateSeed = u32(params.counts.z) * 1103515245u + index * 2246822519u + 97u;
+    if (rand01(gateSeed) > 0.34) {
+      let targetPortal = select(portalA, portalB, enterA);
+      let offsetAngle = rand01(gateSeed + 13u) * TAU;
+      let offsetRadius = portalRadius * (0.45 + 0.5 * rand01(gateSeed + 23u));
+      let offset = vec2f(cos(offsetAngle), sin(offsetAngle)) * offsetRadius;
+      nextPos = vec2f(
+        wrap_coordinate(targetPortal.x + offset.x, worldW),
+        wrap_coordinate(targetPortal.y + offset.y, worldH),
+      );
+      let velBlend = nextVel + offset * 0.12;
+      let velLen = length(velBlend);
+      if (velLen > 0.0001) {
+        let boostedSpeed = clamp(speed * (0.94 + 0.45 * rand01(gateSeed + 37u)), minSpeed, maxSpeed);
+        nextVel = velBlend * (boostedSpeed / velLen);
+        nextHeading = atan2(nextVel.y, nextVel.x);
+      }
+    }
+  }
 
   var caught = false;
   var caughtBy = 0u;
@@ -836,17 +893,17 @@ fn hash_u32(x: u32) -> u32 {
   return v;
 }
 
-fn read_pheromone(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec2f {
+fn read_pheromone(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec4f {
   if (sampleCount == 0u || cols == 0u || rows == 0u) {
-    return vec2f(0.0, 0.0);
+    return vec4f(0.0, 0.0, 0.0, 0.0);
   }
   let sx = wrap_index(x, i32(cols));
   let sy = wrap_index(y, i32(rows));
   let idx = sy * cols + sx;
   if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
-    return vec2f(0.0, 0.0);
+    return vec4f(0.0, 0.0, 0.0, 0.0);
   }
-  return pheromonePrev[idx].values.xy;
+  return pheromonePrev[idx].values;
 }
 
 @compute @workgroup_size(${HEATMAP_WORKGROUP_SIZE})
@@ -885,8 +942,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   let trailNeighborMean = (center.x + right.x + left.x + down.x + up.x) * 0.2;
   let fearNeighborMean = (center.y + right.y + left.y + down.y + up.y) * 0.2;
+  let foodNeighborMean = (center.z + right.z + left.z + down.z + up.z) * 0.2;
+  let hazardNeighborMean = (center.w + right.w + left.w + down.w + up.w) * 0.2;
   var trail = mix(center.x, trailNeighborMean, diffBlend);
   var fear = mix(center.y, fearNeighborMean, diffBlend * 1.2);
+  var food = mix(center.z, foodNeighborMean, diffBlend * 0.9);
+  var hazard = mix(center.w, hazardNeighborMean, diffBlend * 1.05);
 
   let boidSampleCount = min(boidCount, MAX_BOID_SAMPLES);
   let seed = hash_u32(idx * 1664525u + u32(params.counts.z) * 1013904223u + 23u);
@@ -896,18 +957,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     step = 1u + ((seed >> 1u) % (boidCount - 1u));
   }
 
-  var trailDeposit = 0.0;
+  var boidPresence = 0.0;
   for (var i: u32 = 0u; i < boidSampleCount; i = i + 1u) {
     let boid = boids[boidIndex];
     let dx = wrapped_abs_delta(samplePos.x, boid.posVel.x, worldW);
     let dy = wrapped_abs_delta(samplePos.y, boid.posVel.y, worldH);
     let distSq = dx * dx + dy * dy;
     if (distSq < diffuseRadiusSq) {
-      trailDeposit = trailDeposit + exp(-distSq / max(diffuseRadiusSq * 0.62, 0.0001));
+      boidPresence = boidPresence + exp(-distSq / max(diffuseRadiusSq * 0.62, 0.0001));
     }
     boidIndex = (boidIndex + step) % boidCount;
   }
-  trailDeposit = trailDeposit * (f32(boidCount) / f32(boidSampleCount)) * 0.0022;
+  boidPresence = boidPresence * (f32(boidCount) / f32(boidSampleCount));
+  var trailDeposit = boidPresence * 0.0022;
   let trailPulse = 0.72 + 0.28 * (0.5 + 0.5 * sin(simTime * 0.27));
   trailDeposit = trailDeposit * trailPulse;
 
@@ -926,10 +988,42 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let fearPulse = 0.85 + 0.45 * (0.5 + 0.5 * sin(simTime * 0.41 + 0.6));
   fearDeposit = fearDeposit * fearPulse;
 
+  let foodWave = 0.5 + 0.5 *
+    sin(samplePos.x * 0.012 + simTime * 0.37) *
+    cos(samplePos.y * 0.009 - simTime * 0.41);
+  let foodRegen = (0.0009 + 0.0021 * foodWave) * dt * 60.0;
+  let foodConsume = boidPresence * 0.0030 * dt * 60.0;
+
+  let stormA = vec2f(
+    (0.5 + 0.34 * sin(simTime * 0.17 + 0.8)) * worldW,
+    (0.5 + 0.29 * cos(simTime * 0.13 - 0.4)) * worldH,
+  );
+  let stormB = vec2f(
+    (0.5 + 0.37 * sin(simTime * 0.23 + 2.4)) * worldW,
+    (0.5 + 0.27 * cos(simTime * 0.19 + 1.3)) * worldH,
+  );
+  let stormRadiusA = params.boidA.z * 0.72;
+  let stormRadiusB = params.boidA.z * 0.58;
+  let dax = wrapped_abs_delta(samplePos.x, stormA.x, worldW);
+  let day = wrapped_abs_delta(samplePos.y, stormA.y, worldH);
+  let dbx = wrapped_abs_delta(samplePos.x, stormB.x, worldW);
+  let dby = wrapped_abs_delta(samplePos.y, stormB.y, worldH);
+  let distASq = dax * dax + day * day;
+  let distBSq = dbx * dbx + dby * dby;
+  let stormDeposit =
+    exp(-distASq / max(stormRadiusA * stormRadiusA * 0.34, 0.0001)) * 0.030 +
+    exp(-distBSq / max(stormRadiusB * stormRadiusB * 0.30, 0.0001)) * 0.026;
+
+  let foodDecay = max(trailDecay * 0.58, 0.01);
+  let hazardDecay = max(fearDecay * 1.55, 0.01);
+
   trail = max(0.0, trail + trailDeposit - trail * trailDecay * dt);
   fear = max(0.0, fear + fearDeposit - fear * fearDecay * dt);
+  food = max(0.0, food + foodRegen - foodConsume - food * foodDecay * dt);
+  hazard = max(0.0, hazard + stormDeposit + fearDeposit * 0.22 - hazard * hazardDecay * dt);
+  fear = fear + hazard * 0.018;
 
-  pheromoneNext[idx].values = vec4f(trail, fear, trail - center.x, fear - center.y);
+  pheromoneNext[idx].values = vec4f(trail, fear, food, hazard);
 }
 `;
 
@@ -1237,20 +1331,24 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) inst
   let sample = pheromones[instanceIndex].values;
   let trail = max(0.0, sample.x);
   let fear = max(0.0, sample.y);
-  let trailDelta = sample.z;
-  let fearDelta = sample.w;
-  let total = trail + fear;
-  let intensity = 1.0 - exp(-total * 0.18);
-  let fearRatio = fear / max(total, 0.0001);
+  let food = max(0.0, sample.z);
+  let hazard = max(0.0, sample.w);
 
-  let calm = vec3f(0.07, 0.19, 0.36);
-  let trailColor = vec3f(0.20, 0.94, 0.62);
-  let fearColor = vec3f(1.00, 0.27, 0.35);
-  let mixed = mix(trailColor, fearColor, clamp(fearRatio, 0.0, 1.0));
-  let trendSignal = clamp((trailDelta + fearDelta * 1.5) * 18.0, -1.0, 1.0);
-  let trendBoost = vec3f(0.12, 0.14, 0.08) * max(0.0, trendSignal);
-  let trendCool = vec3f(0.00, 0.06, 0.12) * max(0.0, -trendSignal);
-  let color = mix(calm, mixed + trendBoost + trendCool, 0.15 + 0.85 * smoothstep(0.0, 0.9, intensity));
+  let total = trail + fear + food + hazard;
+  let intensity = 1.0 - exp(-total * 0.16);
+  let trailTone = clamp(trail * 0.34, 0.0, 1.0);
+  let fearTone = clamp(fear * 0.44, 0.0, 1.0);
+  let foodTone = clamp(food * 0.52, 0.0, 1.0);
+  let hazardTone = clamp(hazard * 0.48, 0.0, 1.0);
+
+  let base = vec3f(0.03, 0.07, 0.16);
+  var color = base;
+  color = color + vec3f(0.08, 0.80, 0.90) * trailTone;
+  color = color + vec3f(1.00, 0.24, 0.32) * fearTone;
+  color = color + vec3f(0.96, 0.88, 0.20) * foodTone;
+  color = color + vec3f(1.00, 0.56, 0.12) * hazardTone;
+  let blend = 0.12 + 0.88 * smoothstep(0.0, 0.92, intensity);
+  color = mix(base, min(color, vec3f(1.0, 1.0, 1.0)), blend);
 
   let clipX = world.x / worldW * 2.0 - 1.0;
   let clipY = 1.0 - world.y / worldH * 2.0;
@@ -1518,8 +1616,8 @@ function updateTextState(mode = 'running') {
     mode,
     renderer: 'webgpu',
     boidNeighborSearch: 'uniform-grid',
-    lifeFeatures: ['pheromone_trail', 'fear_field', 'panic_state'],
-    dynamicSystems: ['migratory_anchor_wave', 'flow_currents', 'social_pulse_cycles'],
+    lifeFeatures: ['pheromone_trail', 'fear_field', 'panic_state', 'resource_field', 'hazard_storms', 'wormholes'],
+    dynamicSystems: ['migratory_anchor_wave', 'flow_currents', 'social_pulse_cycles', 'portal_transit'],
     coordinateSystem: 'origin top-left, +x right, +y down',
     viewport: { width: worldWidth, height: worldHeight },
     boidCount: BOID_COUNT,
@@ -1700,7 +1798,7 @@ function stepSimulation(dtSeconds) {
   } finally {
     heatPass.end();
   }
-  heatmapCpuMs = performance.now() - heatmapStart;
+  heatmapCpuMs += performance.now() - heatmapStart;
 
   currentHeatmapBufferIndex = 1 - currentHeatmapBufferIndex;
 
