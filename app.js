@@ -267,6 +267,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let worldH = params.world.y;
   let dt = params.world.z;
   let frameScale = params.world.w;
+  let simTime = f32(params.counts.z) * dt;
   let cols = max(1u, u32(ceil(worldW / GRID_CELL_SIZE)));
   let rows = max(1u, u32(ceil(worldH / GRID_CELL_SIZE)));
   let gridCellCount = min(GRID_MAX_CELLS, cols * rows);
@@ -317,6 +318,20 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let trailGradient = vec2f(pherRight.x - pherLeft.x, pherDown.x - pherUp.x);
   let fearGradient = vec2f(pherRight.y - pherLeft.y, pherDown.y - pherUp.y);
   var panic = clamp(pherCenter.y * panicBoost, 0.0, 1.0);
+
+  let seasonalPhase = 0.5 + 0.5 * sin(simTime * 0.19);
+  let socialPulse = 0.5 + 0.5 * sin(simTime * 0.31 + f32(index) * 0.002);
+  let migratoryAnchor = vec2f(
+    (0.5 + 0.34 * sin(simTime * 0.11 + 1.3)) * worldW,
+    (0.5 + 0.29 * sin(simTime * 0.13 - 0.9)) * worldH,
+  );
+  let anchorDelta = vec2f(
+    wrapped_delta(mePos.x, migratoryAnchor.x, worldW),
+    wrapped_delta(mePos.y, migratoryAnchor.y, worldH),
+  );
+  let flowAngle = sin((mePos.y / max(worldH, 1.0)) * TAU * 2.0 + simTime * 0.61) * 1.3 +
+    cos((mePos.x / max(worldW, 1.0)) * TAU * 1.7 - simTime * 0.49);
+  let currentDir = vec2f(cos(flowAngle), sin(flowAngle));
 
   for (var oy: i32 = -cellRange; oy <= cellRange; oy = oy + 1) {
     let ny = wrap_index(meCellY + oy, i32(rows));
@@ -383,9 +398,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     cohesion = cohesion / n;
     separation = separation / n;
 
-    let alignScale = mix(1.0, 0.55, panic);
-    let cohesionScale = mix(1.0, 0.45, panic);
-    let separationScale = 1.0 + panic * 1.65;
+    let alignScale = mix(1.0, 0.55, panic) * (0.85 + 0.30 * socialPulse);
+    let cohesionScale = mix(1.0, 0.45, panic) * (0.70 + 0.45 * socialPulse);
+    let separationScale = (1.0 + panic * 1.65) * (0.85 + 0.55 * (1.0 - socialPulse));
 
     let alignSteer = steer_towards(meVel, align, maxSpeed, maxForce);
     let cohesionSteer = steer_towards(meVel, cohesion, maxSpeed, maxForce);
@@ -404,6 +419,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     panic = max(panic, clamp(f32(predatorThreats) * 0.45, 0.0, 1.0));
   }
 
+  let currentSteer = steer_towards(meVel, currentDir, maxSpeed, maxForce * 0.9);
+  let migrationSteer = steer_towards(meVel, anchorDelta, maxSpeed, maxForce * 0.95);
+  desiredVel = desiredVel + currentSteer * (0.20 + 0.30 * seasonalPhase);
+  desiredVel = desiredVel + migrationSteer * (0.10 + 0.26 * seasonalPhase) * (1.0 - panic * 0.55);
+
   if (dot(trailGradient, trailGradient) > 0.000001) {
     let trailSteer = steer_towards(meVel, trailGradient, maxSpeed, maxForce);
     desiredVel = desiredVel + trailSteer * trailWeight * (1.0 - panic);
@@ -412,6 +432,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (dot(fearGradient, fearGradient) > 0.000001) {
     let fearSteer = steer_towards(meVel, -fearGradient, maxSpeed, maxForce * 1.7);
     desiredVel = desiredVel + fearSteer * fearWeight;
+  }
+
+  if (panic > 0.2) {
+    let panicDrift = vec2f(
+      cos(simTime * 1.75 + f32(index) * 0.017),
+      sin(simTime * 1.51 + f32(index) * 0.013),
+    );
+    desiredVel = desiredVel + panicDrift * (maxForce * panic * 0.35);
   }
 
   let desiredLimited = limit_magnitude(desiredVel, maxSpeed);
@@ -842,6 +870,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let sx = idx % cols;
   let sy = idx / cols;
   let samplePos = vec2f((f32(sx) + 0.5) * spacing, (f32(sy) + 0.5) * spacing);
+  let simTime = f32(params.counts.z) * dt;
 
   let center = read_pheromone(i32(sx), i32(sy), cols, rows, sampleCount);
   let right = read_pheromone(i32(sx) + 1, i32(sy), cols, rows, sampleCount);
@@ -879,6 +908,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     boidIndex = (boidIndex + step) % boidCount;
   }
   trailDeposit = trailDeposit * (f32(boidCount) / f32(boidSampleCount)) * 0.0022;
+  let trailPulse = 0.72 + 0.28 * (0.5 + 0.5 * sin(simTime * 0.27));
+  trailDeposit = trailDeposit * trailPulse;
 
   var fearDeposit = 0.0;
   let fearRadiusSq = params.boidA.z * params.boidA.z;
@@ -892,6 +923,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
   fearDeposit = fearDeposit * 0.055;
+  let fearPulse = 0.85 + 0.45 * (0.5 + 0.5 * sin(simTime * 0.41 + 0.6));
+  fearDeposit = fearDeposit * fearPulse;
 
   trail = max(0.0, trail + trailDeposit - trail * trailDecay * dt);
   fear = max(0.0, fear + fearDeposit - fear * fearDecay * dt);
@@ -1140,6 +1173,108 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
+const pheromoneRenderShader = `
+struct PheromoneSample {
+  values: vec4f,
+};
+
+struct SimParams {
+  world: vec4f,
+  counts: vec4f,
+  boidA: vec4f,
+  boidB: vec4f,
+  boidC: vec4f,
+  predatorA: vec4f,
+  predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
+  lifeA: vec4f,
+};
+
+struct VSOut {
+  @builtin(position) position: vec4f,
+  @location(0) local: vec2f,
+  @location(1) color: vec3f,
+  @location(2) alpha: f32,
+};
+
+@group(0) @binding(0) var<storage, read> pheromones: array<PheromoneSample>;
+@group(0) @binding(1) var<uniform> params: SimParams;
+
+fn quad_vertex(vertexIndex: u32) -> vec2f {
+  if (vertexIndex == 0u) {
+    return vec2f(-1.0, -1.0);
+  }
+  if (vertexIndex == 1u) {
+    return vec2f(1.0, -1.0);
+  }
+  if (vertexIndex == 2u) {
+    return vec2f(-1.0, 1.0);
+  }
+  if (vertexIndex == 3u) {
+    return vec2f(-1.0, 1.0);
+  }
+  if (vertexIndex == 4u) {
+    return vec2f(1.0, -1.0);
+  }
+  return vec2f(1.0, 1.0);
+}
+
+@vertex
+fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
+  let worldW = params.world.x;
+  let worldH = params.world.y;
+  let dotSpacing = max(params.heatmapA.x, 0.75);
+  let dotRadius = max(params.heatmapA.y, 0.5);
+
+  let cols = max(1u, u32(floor(worldW / dotSpacing)));
+  let sx = instanceIndex % cols;
+  let sy = instanceIndex / cols;
+  let center = vec2f((f32(sx) + 0.5) * dotSpacing, (f32(sy) + 0.5) * dotSpacing);
+  let local = quad_vertex(vertexIndex);
+  let world = center + local * dotRadius;
+
+  let sample = pheromones[instanceIndex].values;
+  let trail = max(0.0, sample.x);
+  let fear = max(0.0, sample.y);
+  let trailDelta = sample.z;
+  let fearDelta = sample.w;
+  let total = trail + fear;
+  let intensity = 1.0 - exp(-total * 0.18);
+  let fearRatio = fear / max(total, 0.0001);
+
+  let calm = vec3f(0.07, 0.19, 0.36);
+  let trailColor = vec3f(0.20, 0.94, 0.62);
+  let fearColor = vec3f(1.00, 0.27, 0.35);
+  let mixed = mix(trailColor, fearColor, clamp(fearRatio, 0.0, 1.0));
+  let trendSignal = clamp((trailDelta + fearDelta * 1.5) * 18.0, -1.0, 1.0);
+  let trendBoost = vec3f(0.12, 0.14, 0.08) * max(0.0, trendSignal);
+  let trendCool = vec3f(0.00, 0.06, 0.12) * max(0.0, -trendSignal);
+  let color = mix(calm, mixed + trendBoost + trendCool, 0.15 + 0.85 * smoothstep(0.0, 0.9, intensity));
+
+  let clipX = world.x / worldW * 2.0 - 1.0;
+  let clipY = 1.0 - world.y / worldH * 2.0;
+
+  var out: VSOut;
+  out.position = vec4f(clipX, clipY, 0.0, 1.0);
+  out.local = local;
+  out.color = color;
+  out.alpha = 0.08 + 0.92 * smoothstep(0.0, 1.0, intensity);
+  return out;
+}
+
+@fragment
+fn fsMain(in: VSOut) -> @location(0) vec4f {
+  let distSq = dot(in.local, in.local);
+  if (distSq > 1.0) {
+    discard;
+  }
+  let edge = 1.0 - smoothstep(0.62, 1.0, distSq);
+  let alpha = in.alpha * (0.33 + 0.67 * edge);
+  return vec4f(in.color * alpha, alpha);
+}
+`;
+
 const heatmapSampleComputeShader = `
 struct BoidState {
   posVel: vec4f,
@@ -1384,6 +1519,7 @@ function updateTextState(mode = 'running') {
     renderer: 'webgpu',
     boidNeighborSearch: 'uniform-grid',
     lifeFeatures: ['pheromone_trail', 'fear_field', 'panic_state'],
+    dynamicSystems: ['migratory_anchor_wave', 'flow_currents', 'social_pulse_cycles'],
     coordinateSystem: 'origin top-left, +x right, +y down',
     viewport: { width: worldWidth, height: worldHeight },
     boidCount: BOID_COUNT,
@@ -1579,7 +1715,8 @@ function renderFrame() {
 
   const boidRenderBindGroup = gpu.boidRenderBindGroups[currentBoidBufferIndex];
   const heatmapRenderBindGroup = gpu.boidHeatmapRenderBindGroups[currentHeatmapBufferIndex];
-  if (!boidRenderBindGroup || !heatmapRenderBindGroup) {
+  const pheromoneRenderBindGroup = gpu.pheromoneRenderBindGroups[currentPheromoneBufferIndex];
+  if (!boidRenderBindGroup || !heatmapRenderBindGroup || !pheromoneRenderBindGroup) {
     throw new Error(`Missing render bind group for boid buffer index ${currentBoidBufferIndex}.`);
   }
 
@@ -1601,6 +1738,10 @@ function renderFrame() {
     if (renderMode === 'heatmap') {
       renderPass.setPipeline(gpu.boidHeatmapRenderPipeline);
       renderPass.setBindGroup(0, heatmapRenderBindGroup);
+      renderPass.draw(6, heatmapPointCount, 0, 0);
+    } else if (renderMode === 'pheromone') {
+      renderPass.setPipeline(gpu.pheromoneRenderPipeline);
+      renderPass.setBindGroup(0, pheromoneRenderBindGroup);
       renderPass.draw(6, heatmapPointCount, 0, 0);
     } else {
       renderPass.setPipeline(gpu.boidRenderPipeline);
@@ -1713,9 +1854,14 @@ function updateViewToggleLabel() {
   if (!viewToggleButton) {
     return;
   }
-  const isHeatmap = renderMode === 'heatmap';
-  viewToggleButton.textContent = isHeatmap ? 'View: Heatmap' : 'View: Arrows';
-  viewToggleButton.setAttribute('aria-pressed', isHeatmap ? 'true' : 'false');
+  if (renderMode === 'heatmap') {
+    viewToggleButton.textContent = 'View: Heatmap';
+  } else if (renderMode === 'pheromone') {
+    viewToggleButton.textContent = 'View: Pheromone';
+  } else {
+    viewToggleButton.textContent = 'View: Arrows';
+  }
+  viewToggleButton.setAttribute('aria-pressed', renderMode === 'boids' ? 'false' : 'true');
 }
 
 async function initWebGPU() {
@@ -1831,6 +1977,7 @@ async function initWebGPU() {
   const boidRenderModule = await createCheckedShaderModule('boidRenderShader', boidRenderShader);
   const heatmapSampleComputeModule = await createCheckedShaderModule('heatmapSampleComputeShader', heatmapSampleComputeShader);
   const boidHeatmapRenderModule = await createCheckedShaderModule('boidHeatmapRenderShader', boidHeatmapRenderShader);
+  const pheromoneRenderModule = await createCheckedShaderModule('pheromoneRenderShader', pheromoneRenderShader);
   const predatorRenderModule = await createCheckedShaderModule('predatorRenderShader', predatorRenderShader);
 
   const boidUpdatePipeline = device.createComputePipeline({
@@ -1932,6 +2079,39 @@ async function initWebGPU() {
 	              dstFactor: 'one-minus-src-alpha',
 	              operation: 'add',
 	            },
+            alpha: {
+              srcFactor: 'one',
+              dstFactor: 'one-minus-src-alpha',
+              operation: 'add',
+            },
+          },
+        },
+      ],
+    },
+    primitive: {
+      topology: 'triangle-list',
+      cullMode: 'none',
+    },
+  });
+
+  const pheromoneRenderPipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: {
+      module: pheromoneRenderModule,
+      entryPoint: 'vsMain',
+    },
+    fragment: {
+      module: pheromoneRenderModule,
+      entryPoint: 'fsMain',
+      targets: [
+        {
+          format,
+          blend: {
+            color: {
+              srcFactor: 'one',
+              dstFactor: 'one-minus-src-alpha',
+              operation: 'add',
+            },
             alpha: {
               srcFactor: 'one',
               dstFactor: 'one-minus-src-alpha',
@@ -2209,6 +2389,23 @@ async function initWebGPU() {
     }),
   ];
 
+  const pheromoneRenderBindGroups = [
+    device.createBindGroup({
+      layout: pheromoneRenderPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: pheromoneBuffers[0] } },
+        { binding: 1, resource: { buffer: paramsBuffer } },
+      ],
+    }),
+    device.createBindGroup({
+      layout: pheromoneRenderPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: pheromoneBuffers[1] } },
+        { binding: 1, resource: { buffer: paramsBuffer } },
+      ],
+    }),
+  ];
+
   const predatorRenderBindGroup = device.createBindGroup({
     layout: predatorRenderPipeline.getBindGroupLayout(0),
     entries: [
@@ -2239,6 +2436,7 @@ async function initWebGPU() {
     heatmapComputePipeline,
     boidRenderPipeline,
     boidHeatmapRenderPipeline,
+    pheromoneRenderPipeline,
     predatorRenderPipeline,
     boidUpdateBindGroups,
     predatorUpdateBindGroups,
@@ -2250,6 +2448,7 @@ async function initWebGPU() {
     predatorResolveBindGroup,
     boidRenderBindGroups,
     boidHeatmapRenderBindGroups,
+    pheromoneRenderBindGroups,
     predatorRenderBindGroup,
   };
 
@@ -2358,7 +2557,13 @@ panicBoostRange.addEventListener('input', () => {
 });
 
 viewToggleButton.addEventListener('click', () => {
-  renderMode = renderMode === 'boids' ? 'heatmap' : 'boids';
+  if (renderMode === 'boids') {
+    renderMode = 'heatmap';
+  } else if (renderMode === 'heatmap') {
+    renderMode = 'pheromone';
+  } else {
+    renderMode = 'boids';
+  }
   updateViewToggleLabel();
   updateTextState();
 });
