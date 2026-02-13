@@ -10,7 +10,7 @@
     <main>
       <header>
         <h1>Boids Simulation</h1>
-        <p>10000 boids, fixed count.</p>
+        <p>30000 boids, fixed count.</p>
       </header>
 
       <section class="sim-layout">
@@ -21,7 +21,7 @@
         <aside class="controls" aria-label="Simulation controls">
           <section class="control-section" aria-label="Boid motion controls">
             <h2 class="control-title">Boids</h2>
-            <p class="fixed-count">Count: <strong>10000</strong> (fixed)</p>
+            <p class="fixed-count">Count: <strong>30000</strong> (fixed)</p>
             <label class="control-group" for="turnAccelRange">
               <span>Turn Accel: <strong id="turnAccelValue">720</strong> deg/s²</span>
               <input id="turnAccelRange" type="range" min="120" max="2400" step="20" value="720" />
@@ -67,6 +67,30 @@
             <label class="control-group" for="heatmapTrendDeadbandRange">
               <span>Trend Deadband: <strong id="heatmapTrendDeadbandValue">0.045</strong></span>
               <input id="heatmapTrendDeadbandRange" type="range" min="0.005" max="0.18" step="0.005" value="0.045" />
+            </label>
+          </section>
+
+          <section class="control-section" aria-label="Life field controls">
+            <h2 class="control-title">Life Field</h2>
+            <label class="control-group" for="pherTrailWeightRange">
+              <span>Trail Follow: <strong id="pherTrailWeightValue">0.60</strong></span>
+              <input id="pherTrailWeightRange" type="range" min="0" max="2.0" step="0.05" value="0.60" />
+            </label>
+            <label class="control-group" for="pherFearWeightRange">
+              <span>Fear Avoid: <strong id="pherFearWeightValue">1.50</strong></span>
+              <input id="pherFearWeightRange" type="range" min="0" max="3.5" step="0.05" value="1.50" />
+            </label>
+            <label class="control-group" for="pherDiffusionRange">
+              <span>Field Diffusion: <strong id="pherDiffusionValue">0.28</strong></span>
+              <input id="pherDiffusionRange" type="range" min="0.02" max="0.8" step="0.01" value="0.28" />
+            </label>
+            <label class="control-group" for="pherDecayRange">
+              <span>Field Decay: <strong id="pherDecayValue">0.30</strong></span>
+              <input id="pherDecayRange" type="range" min="0.02" max="1.2" step="0.01" value="0.30" />
+            </label>
+            <label class="control-group" for="panicBoostRange">
+              <span>Panic Boost: <strong id="panicBoostValue">1.20</strong></span>
+              <input id="panicBoostRange" type="range" min="0.2" max="2.6" step="0.05" value="1.20" />
             </label>
           </section>
 

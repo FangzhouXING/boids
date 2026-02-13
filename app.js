@@ -19,6 +19,16 @@ const heatmapTrendGainRange = document.getElementById('heatmapTrendGainRange');
 const heatmapTrendGainValue = document.getElementById('heatmapTrendGainValue');
 const heatmapTrendDeadbandRange = document.getElementById('heatmapTrendDeadbandRange');
 const heatmapTrendDeadbandValue = document.getElementById('heatmapTrendDeadbandValue');
+const pherTrailWeightRange = document.getElementById('pherTrailWeightRange');
+const pherTrailWeightValue = document.getElementById('pherTrailWeightValue');
+const pherFearWeightRange = document.getElementById('pherFearWeightRange');
+const pherFearWeightValue = document.getElementById('pherFearWeightValue');
+const pherDiffusionRange = document.getElementById('pherDiffusionRange');
+const pherDiffusionValue = document.getElementById('pherDiffusionValue');
+const pherDecayRange = document.getElementById('pherDecayRange');
+const pherDecayValue = document.getElementById('pherDecayValue');
+const panicBoostRange = document.getElementById('panicBoostRange');
+const panicBoostValue = document.getElementById('panicBoostValue');
 const fpsValue = document.getElementById('fpsValue');
 const frameCpuValue = document.getElementById('frameCpuValue');
 const simCpuValue = document.getElementById('simCpuValue');
@@ -26,7 +36,7 @@ const heatmapCpuValue = document.getElementById('heatmapCpuValue');
 const renderCpuValue = document.getElementById('renderCpuValue');
 
 const FIXED_STEP = 1 / 60;
-const BOID_COUNT = 10000;
+const BOID_COUNT = 30000;
 const PREDATOR_COUNT = 5;
 const BOID_WORKGROUP_SIZE = 128;
 const CATCH_CLEAR_WORKGROUP_SIZE = 32;
@@ -34,6 +44,7 @@ const HEATMAP_WORKGROUP_SIZE = 128;
 const GRID_WORKGROUP_SIZE = 128;
 const BOID_FLOATS = 8;
 const PREDATOR_FLOATS = 12;
+const PHEROMONE_FLOATS = 4;
 const GRID_CELL_SIZE = 72;
 const GRID_MAX_CELLS = 2048;
 const GRID_CELL_CAPACITY = 256;
@@ -74,6 +85,11 @@ const config = {
   heatmapSampleBudget: Number(heatmapSamplesRange?.value || HEATMAP_SAMPLE_BUDGET),
   heatmapTrendGain: Number(heatmapTrendGainRange?.value || HEATMAP_TREND_GAIN),
   heatmapTrendDeadband: Number(heatmapTrendDeadbandRange?.value || HEATMAP_TREND_DEADBAND),
+  pherTrailWeight: Number(pherTrailWeightRange?.value || 0.6),
+  pherFearWeight: Number(pherFearWeightRange?.value || 1.5),
+  pherDiffusion: Number(pherDiffusionRange?.value || 0.28),
+  pherDecay: Number(pherDecayRange?.value || 0.3),
+  panicBoost: Number(panicBoostRange?.value || 1.2),
 };
 
 let worldWidth = 960;
@@ -86,6 +102,7 @@ let currentBoidBufferIndex = 0;
 let renderMode = 'boids';
 let heatmapPointCount = 1;
 let currentHeatmapBufferIndex = 0;
+let currentPheromoneBufferIndex = 0;
 let gpu = null;
 let gpuRuntimeError = false;
 let lastTextState = JSON.stringify({
@@ -115,6 +132,10 @@ struct PredatorState {
   aux: vec4f,
 };
 
+struct PheromoneSample {
+  values: vec4f,
+};
+
 struct SimParams {
   world: vec4f,
   counts: vec4f,
@@ -125,20 +146,23 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boidsIn: array<BoidState>;
 @group(0) @binding(1) var<storage, read_write> boidsOut: array<BoidState>;
 @group(0) @binding(2) var<storage, read> predators: array<PredatorState>;
-@group(0) @binding(3) var<storage, read_write> cellCounts: array<atomic<u32>>;
-@group(0) @binding(4) var<storage, read> cellBoids: array<u32>;
-@group(0) @binding(5) var<storage, read_write> caughtFlags: array<atomic<u32>>;
-@group(0) @binding(6) var<uniform> params: SimParams;
+@group(0) @binding(3) var<storage, read> pheromones: array<PheromoneSample>;
+@group(0) @binding(4) var<storage, read_write> cellCounts: array<atomic<u32>>;
+@group(0) @binding(5) var<storage, read> cellBoids: array<u32>;
+@group(0) @binding(6) var<storage, read_write> caughtFlags: array<atomic<u32>>;
+@group(0) @binding(7) var<uniform> params: SimParams;
 
 const TAU: f32 = 6.28318530718;
 const GRID_CELL_SIZE: f32 = ${GRID_CELL_SIZE.toFixed(1)};
 const GRID_MAX_CELLS: u32 = ${GRID_MAX_CELLS}u;
 const GRID_CELL_CAPACITY: u32 = ${GRID_CELL_CAPACITY}u;
+const PHEROMONE_MAX_POINTS: u32 = ${HEATMAP_MAX_POINTS}u;
 
 fn wrap_coordinate(value: f32, size: f32) -> f32 {
   var result = value;
@@ -168,6 +192,19 @@ fn wrap_index(value: i32, size: i32) -> u32 {
     v = v + size;
   }
   return u32(v);
+}
+
+fn read_pheromone_sample(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec2f {
+  if (cols == 0u || rows == 0u || sampleCount == 0u) {
+    return vec2f(0.0, 0.0);
+  }
+  let sx = wrap_index(x, i32(cols));
+  let sy = wrap_index(y, i32(rows));
+  let idx = sy * cols + sx;
+  if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
+    return vec2f(0.0, 0.0);
+  }
+  return pheromones[idx].values.xy;
 }
 
 fn limit_magnitude(v: vec2f, maxLen: f32) -> vec2f {
@@ -233,6 +270,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let cols = max(1u, u32(ceil(worldW / GRID_CELL_SIZE)));
   let rows = max(1u, u32(ceil(worldH / GRID_CELL_SIZE)));
   let gridCellCount = min(GRID_MAX_CELLS, cols * rows);
+  let pherSpacing = max(params.heatmapA.x, 0.75);
+  let pherCols = max(1u, u32(floor(worldW / pherSpacing)));
+  let pherRows = max(1u, u32(floor(worldH / pherSpacing)));
+  let pherCount = min(PHEROMONE_MAX_POINTS, pherCols * pherRows);
 
   let perceptionSq = params.boidA.x * params.boidA.x;
   let separationSq = params.boidA.y * params.boidA.y;
@@ -250,6 +291,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let separationWeight = params.boidC.w;
 
   let predatorAvoidWeight = params.predatorA.x;
+  let trailWeight = params.lifeA.x;
+  let fearWeight = params.lifeA.y;
+  let panicBoost = params.lifeA.z;
 
   var me = boidsIn[index];
   let mePos = me.posVel.xy;
@@ -262,6 +306,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var cohesion = vec2f(0.0, 0.0);
   var separation = vec2f(0.0, 0.0);
   var neighbors = 0u;
+
+  let pherX = i32(min(pherCols - 1u, u32(floor(mePos.x / pherSpacing))));
+  let pherY = i32(min(pherRows - 1u, u32(floor(mePos.y / pherSpacing))));
+  let pherCenter = read_pheromone_sample(pherX, pherY, pherCols, pherRows, pherCount);
+  let pherRight = read_pheromone_sample(pherX + 1, pherY, pherCols, pherRows, pherCount);
+  let pherLeft = read_pheromone_sample(pherX - 1, pherY, pherCols, pherRows, pherCount);
+  let pherDown = read_pheromone_sample(pherX, pherY + 1, pherCols, pherRows, pherCount);
+  let pherUp = read_pheromone_sample(pherX, pherY - 1, pherCols, pherRows, pherCount);
+  let trailGradient = vec2f(pherRight.x - pherLeft.x, pherDown.x - pherUp.x);
+  let fearGradient = vec2f(pherRight.y - pherLeft.y, pherDown.y - pherUp.y);
+  var panic = clamp(pherCenter.y * panicBoost, 0.0, 1.0);
 
   for (var oy: i32 = -cellRange; oy <= cellRange; oy = oy + 1) {
     let ny = wrap_index(meCellY + oy, i32(rows));
@@ -328,25 +383,41 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     cohesion = cohesion / n;
     separation = separation / n;
 
+    let alignScale = mix(1.0, 0.55, panic);
+    let cohesionScale = mix(1.0, 0.45, panic);
+    let separationScale = 1.0 + panic * 1.65;
+
     let alignSteer = steer_towards(meVel, align, maxSpeed, maxForce);
     let cohesionSteer = steer_towards(meVel, cohesion, maxSpeed, maxForce);
     let separationSteer = steer_towards(meVel, separation, maxSpeed, maxForce * 1.6);
 
-    desiredVel = desiredVel + alignSteer * alignWeight;
-    desiredVel = desiredVel + cohesionSteer * cohesionWeight;
-    desiredVel = desiredVel + separationSteer * separationWeight;
+    desiredVel = desiredVel + alignSteer * alignWeight * alignScale;
+    desiredVel = desiredVel + cohesionSteer * cohesionWeight * cohesionScale;
+    desiredVel = desiredVel + separationSteer * separationWeight * separationScale;
   }
 
   if (predatorThreats > 0u) {
     let t = f32(predatorThreats);
     predatorAvoid = predatorAvoid / t;
     let predatorSteer = steer_towards(meVel, predatorAvoid, maxSpeed, maxForce * 2.2);
-    desiredVel = desiredVel + predatorSteer * predatorAvoidWeight;
+    desiredVel = desiredVel + predatorSteer * predatorAvoidWeight * (1.0 + panic * 1.6);
+    panic = max(panic, clamp(f32(predatorThreats) * 0.45, 0.0, 1.0));
+  }
+
+  if (dot(trailGradient, trailGradient) > 0.000001) {
+    let trailSteer = steer_towards(meVel, trailGradient, maxSpeed, maxForce);
+    desiredVel = desiredVel + trailSteer * trailWeight * (1.0 - panic);
+  }
+
+  if (dot(fearGradient, fearGradient) > 0.000001) {
+    let fearSteer = steer_towards(meVel, -fearGradient, maxSpeed, maxForce * 1.7);
+    desiredVel = desiredVel + fearSteer * fearWeight;
   }
 
   let desiredLimited = limit_magnitude(desiredVel, maxSpeed);
   let desiredSpeed = length(desiredLimited);
-  let speed = clamp(desiredSpeed, minSpeed, maxSpeed);
+  let panicMinSpeed = min(maxSpeed, minSpeed + panic * 0.7);
+  let speed = clamp(desiredSpeed, panicMinSpeed, maxSpeed);
 
   let currentHeading = me.headingTurn.x;
   let currentTurnRate = me.headingTurn.y;
@@ -426,6 +497,7 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boidsIn: array<BoidState>;
@@ -634,6 +706,7 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boids: array<BoidState>;
@@ -674,6 +747,159 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 }
 `;
 
+const pheromoneUpdateShader = `
+struct BoidState {
+  posVel: vec4f,
+  headingTurn: vec4f,
+};
+
+struct PredatorState {
+  posVel: vec4f,
+  headingTimers: vec4f,
+  aux: vec4f,
+};
+
+struct PheromoneSample {
+  values: vec4f,
+};
+
+struct SimParams {
+  world: vec4f,
+  counts: vec4f,
+  boidA: vec4f,
+  boidB: vec4f,
+  boidC: vec4f,
+  predatorA: vec4f,
+  predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
+  lifeA: vec4f,
+};
+
+@group(0) @binding(0) var<storage, read> boids: array<BoidState>;
+@group(0) @binding(1) var<storage, read> predators: array<PredatorState>;
+@group(0) @binding(2) var<storage, read> pheromonePrev: array<PheromoneSample>;
+@group(0) @binding(3) var<storage, read_write> pheromoneNext: array<PheromoneSample>;
+@group(0) @binding(4) var<uniform> params: SimParams;
+
+const PHEROMONE_MAX_POINTS: u32 = ${HEATMAP_MAX_POINTS}u;
+const MAX_BOID_SAMPLES: u32 = 192u;
+
+fn wrap_index(value: i32, size: i32) -> u32 {
+  var v = value % size;
+  if (v < 0) {
+    v = v + size;
+  }
+  return u32(v);
+}
+
+fn wrapped_abs_delta(a: f32, b: f32, size: f32) -> f32 {
+  let direct = abs(a - b);
+  return min(direct, size - direct);
+}
+
+fn hash_u32(x: u32) -> u32 {
+  var v = x;
+  v = v ^ (v >> 16u);
+  v = v * 0x7feb352du;
+  v = v ^ (v >> 15u);
+  v = v * 0x846ca68bu;
+  v = v ^ (v >> 16u);
+  return v;
+}
+
+fn read_pheromone(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec2f {
+  if (sampleCount == 0u || cols == 0u || rows == 0u) {
+    return vec2f(0.0, 0.0);
+  }
+  let sx = wrap_index(x, i32(cols));
+  let sy = wrap_index(y, i32(rows));
+  let idx = sy * cols + sx;
+  if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
+    return vec2f(0.0, 0.0);
+  }
+  return pheromonePrev[idx].values.xy;
+}
+
+@compute @workgroup_size(${HEATMAP_WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  let sampleCount = u32(params.counts.w);
+  if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
+    return;
+  }
+
+  let worldW = params.world.x;
+  let worldH = params.world.y;
+  let boidCount = max(1u, u32(params.counts.x));
+  let predatorCount = u32(params.counts.y);
+  let dt = params.world.z;
+  let spacing = max(params.heatmapA.x, 0.75);
+  let diffuseRadius = max(params.heatmapA.z, 2.0);
+  let diffuseRadiusSq = diffuseRadius * diffuseRadius;
+  let cols = max(1u, u32(floor(worldW / spacing)));
+  let rows = max(1u, u32(floor(worldH / spacing)));
+  let sx = idx % cols;
+  let sy = idx / cols;
+  let samplePos = vec2f((f32(sx) + 0.5) * spacing, (f32(sy) + 0.5) * spacing);
+
+  let center = read_pheromone(i32(sx), i32(sy), cols, rows, sampleCount);
+  let right = read_pheromone(i32(sx) + 1, i32(sy), cols, rows, sampleCount);
+  let left = read_pheromone(i32(sx) - 1, i32(sy), cols, rows, sampleCount);
+  let down = read_pheromone(i32(sx), i32(sy) + 1, cols, rows, sampleCount);
+  let up = read_pheromone(i32(sx), i32(sy) - 1, cols, rows, sampleCount);
+
+  let diffusion = clamp(params.heatmapB.z, 0.01, 0.95);
+  let trailDecay = max(params.heatmapB.w, 0.01);
+  let fearDecay = max(params.lifeA.w, 0.01);
+  let diffBlend = clamp(diffusion * dt * 6.0, 0.01, 0.48);
+
+  let trailNeighborMean = (center.x + right.x + left.x + down.x + up.x) * 0.2;
+  let fearNeighborMean = (center.y + right.y + left.y + down.y + up.y) * 0.2;
+  var trail = mix(center.x, trailNeighborMean, diffBlend);
+  var fear = mix(center.y, fearNeighborMean, diffBlend * 1.2);
+
+  let boidSampleCount = min(boidCount, MAX_BOID_SAMPLES);
+  let seed = hash_u32(idx * 1664525u + u32(params.counts.z) * 1013904223u + 23u);
+  var boidIndex = seed % boidCount;
+  var step = 1u;
+  if (boidCount > 1u) {
+    step = 1u + ((seed >> 1u) % (boidCount - 1u));
+  }
+
+  var trailDeposit = 0.0;
+  for (var i: u32 = 0u; i < boidSampleCount; i = i + 1u) {
+    let boid = boids[boidIndex];
+    let dx = wrapped_abs_delta(samplePos.x, boid.posVel.x, worldW);
+    let dy = wrapped_abs_delta(samplePos.y, boid.posVel.y, worldH);
+    let distSq = dx * dx + dy * dy;
+    if (distSq < diffuseRadiusSq) {
+      trailDeposit = trailDeposit + exp(-distSq / max(diffuseRadiusSq * 0.62, 0.0001));
+    }
+    boidIndex = (boidIndex + step) % boidCount;
+  }
+  trailDeposit = trailDeposit * (f32(boidCount) / f32(boidSampleCount)) * 0.0022;
+
+  var fearDeposit = 0.0;
+  let fearRadiusSq = params.boidA.z * params.boidA.z;
+  for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
+    let predator = predators[p];
+    let dx = wrapped_abs_delta(samplePos.x, predator.posVel.x, worldW);
+    let dy = wrapped_abs_delta(samplePos.y, predator.posVel.y, worldH);
+    let distSq = dx * dx + dy * dy;
+    if (distSq < fearRadiusSq) {
+      fearDeposit = fearDeposit + exp(-distSq / max(fearRadiusSq * 0.28, 0.0001));
+    }
+  }
+  fearDeposit = fearDeposit * 0.055;
+
+  trail = max(0.0, trail + trailDeposit - trail * trailDecay * dt);
+  fear = max(0.0, fear + fearDeposit - fear * fearDecay * dt);
+
+  pheromoneNext[idx].values = vec4f(trail, fear, trail - center.x, fear - center.y);
+}
+`;
+
 const catchClearShader = `
 struct SimParams {
   world: vec4f,
@@ -685,6 +911,7 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read_write> caughtFlags: array<atomic<u32>>;
@@ -717,6 +944,7 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read_write> predators: array<PredatorState>;
@@ -764,6 +992,7 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 struct VSOut {
@@ -829,6 +1058,7 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 struct VSOut {
@@ -930,6 +1160,7 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boids: array<BoidState>;
@@ -1040,6 +1271,7 @@ struct SimParams {
   predatorB: vec4f,
   heatmapA: vec4f,
   heatmapB: vec4f,
+  lifeA: vec4f,
 };
 
 struct VSOut {
@@ -1151,6 +1383,7 @@ function updateTextState(mode = 'running') {
     mode,
     renderer: 'webgpu',
     boidNeighborSearch: 'uniform-grid',
+    lifeFeatures: ['pheromone_trail', 'fear_field', 'panic_state'],
     coordinateSystem: 'origin top-left, +x right, +y down',
     viewport: { width: worldWidth, height: worldHeight },
     boidCount: BOID_COUNT,
@@ -1164,6 +1397,11 @@ function updateTextState(mode = 'running') {
     heatmapSampleBudget: config.heatmapSampleBudget,
     heatmapTrendGain: config.heatmapTrendGain,
     heatmapTrendDeadband: config.heatmapTrendDeadband,
+    pherTrailWeight: config.pherTrailWeight,
+    pherFearWeight: config.pherFearWeight,
+    pherDiffusion: config.pherDiffusion,
+    pherDecay: config.pherDecay,
+    panicBoost: config.panicBoost,
     gridCellSize: GRID_CELL_SIZE,
     gridMaxCells: GRID_MAX_CELLS,
     gridCellCapacity: GRID_CELL_CAPACITY,
@@ -1202,7 +1440,8 @@ function createParamsArray(dtSeconds) {
     config.predatorAvoidWeight, config.predatorAttentionSeconds, config.predatorSeparationRadius, config.predatorSeparationWeight,
     config.predatorPauseSlowdownSeconds, config.predatorSpeedFactor, predatorMaxTurnRate, predatorMaxTurnAcceleration,
     getHeatmapDotSpacingWorld(), getHeatmapDotRadiusWorld(), getHeatmapDiffuseRadiusWorld(), config.heatmapSampleBudget,
-    config.heatmapTrendGain, config.heatmapTrendDeadband, 0, 0,
+    config.heatmapTrendGain, config.heatmapTrendDeadband, config.pherDiffusion, config.pherDecay,
+    config.pherTrailWeight, config.pherFearWeight, config.panicBoost, config.pherDecay * 1.35,
   ]);
 }
 
@@ -1221,6 +1460,7 @@ function reseedSimulation() {
   const zeroFlags = new Uint32Array(PREDATOR_COUNT);
   const zeroGridCounts = new Uint32Array(GRID_MAX_CELLS);
   const zeroHeat = new Float32Array(HEATMAP_MAX_POINTS * 4);
+  const zeroPheromone = new Float32Array(HEATMAP_MAX_POINTS * PHEROMONE_FLOATS);
 
   gpu.device.queue.writeBuffer(gpu.boidBuffers[0], 0, boidData);
   gpu.device.queue.writeBuffer(gpu.boidBuffers[1], 0, boidData);
@@ -1229,11 +1469,14 @@ function reseedSimulation() {
   gpu.device.queue.writeBuffer(gpu.gridCellCountBuffer, 0, zeroGridCounts);
   gpu.device.queue.writeBuffer(gpu.heatmapBuffers[0], 0, zeroHeat);
   gpu.device.queue.writeBuffer(gpu.heatmapBuffers[1], 0, zeroHeat);
+  gpu.device.queue.writeBuffer(gpu.pheromoneBuffers[0], 0, zeroPheromone);
+  gpu.device.queue.writeBuffer(gpu.pheromoneBuffers[1], 0, zeroPheromone);
 
   frameIndex = 0;
   accumulator = 0;
   currentBoidBufferIndex = 0;
   currentHeatmapBufferIndex = 0;
+  currentPheromoneBufferIndex = 0;
   writeParams(FIXED_STEP);
   updateTextState();
 }
@@ -1245,7 +1488,7 @@ function stepSimulation(dtSeconds) {
   const simStart = performance.now();
   let heatmapCpuMs = 0;
 
-  const boidUpdateBindGroup = gpu.boidUpdateBindGroups[currentBoidBufferIndex];
+  const boidUpdateBindGroup = gpu.boidUpdateBindGroups[currentBoidBufferIndex][currentPheromoneBufferIndex];
   const predatorUpdateBindGroup = gpu.predatorUpdateBindGroups[currentBoidBufferIndex];
   const gridBuildBindGroup = gpu.gridBuildBindGroups[currentBoidBufferIndex];
   if (!boidUpdateBindGroup || !predatorUpdateBindGroup || !gridBuildBindGroup) {
@@ -1287,6 +1530,23 @@ function stepSimulation(dtSeconds) {
 
   currentBoidBufferIndex = 1 - currentBoidBufferIndex;
   frameIndex += 1;
+
+  const pheromoneUpdateBindGroup = gpu.pheromoneUpdateBindGroups[currentBoidBufferIndex][currentPheromoneBufferIndex];
+  if (!pheromoneUpdateBindGroup) {
+    throw new Error('Missing pheromone compute bind group.');
+  }
+
+  const pheromoneStart = performance.now();
+  const pheromonePass = encoder.beginComputePass();
+  try {
+    pheromonePass.setPipeline(gpu.pheromoneUpdatePipeline);
+    pheromonePass.setBindGroup(0, pheromoneUpdateBindGroup);
+    pheromonePass.dispatchWorkgroups(Math.ceil(heatmapPointCount / HEATMAP_WORKGROUP_SIZE));
+  } finally {
+    pheromonePass.end();
+  }
+  heatmapCpuMs += performance.now() - pheromoneStart;
+  currentPheromoneBufferIndex = 1 - currentPheromoneBufferIndex;
 
   writeParams(dtSeconds);
 
@@ -1484,9 +1744,10 @@ async function initWebGPU() {
   const boidBufferBytes = BOID_COUNT * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const predatorBufferBytes = PREDATOR_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const heatmapBufferBytes = HEATMAP_MAX_POINTS * 4 * Float32Array.BYTES_PER_ELEMENT;
+  const pheromoneBufferBytes = HEATMAP_MAX_POINTS * PHEROMONE_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const gridCellCountBytes = GRID_MAX_CELLS * Uint32Array.BYTES_PER_ELEMENT;
   const gridBoidIndexBytes = GRID_MAX_CELLS * GRID_CELL_CAPACITY * Uint32Array.BYTES_PER_ELEMENT;
-  const paramsBufferBytes = 36 * Float32Array.BYTES_PER_ELEMENT;
+  const paramsBufferBytes = 40 * Float32Array.BYTES_PER_ELEMENT;
   const caughtFlagsBytes = PREDATOR_COUNT * Uint32Array.BYTES_PER_ELEMENT;
 
   const boidBuffers = [
@@ -1512,6 +1773,17 @@ async function initWebGPU() {
     }),
     device.createBuffer({
       size: heatmapBufferBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    }),
+  ];
+
+  const pheromoneBuffers = [
+    device.createBuffer({
+      size: pheromoneBufferBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    }),
+    device.createBuffer({
+      size: pheromoneBufferBytes,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     }),
   ];
@@ -1553,6 +1825,7 @@ async function initWebGPU() {
   const predatorUpdateModule = await createCheckedShaderModule('predatorUpdateShader', predatorUpdateShader);
   const gridClearModule = await createCheckedShaderModule('gridClearShader', gridClearShader);
   const gridBuildModule = await createCheckedShaderModule('gridBuildShader', gridBuildShader);
+  const pheromoneUpdateModule = await createCheckedShaderModule('pheromoneUpdateShader', pheromoneUpdateShader);
   const clearCaughtModule = await createCheckedShaderModule('catchClearShader', catchClearShader);
   const predatorResolveModule = await createCheckedShaderModule('predatorResolveShader', predatorResolveShader);
   const boidRenderModule = await createCheckedShaderModule('boidRenderShader', boidRenderShader);
@@ -1588,6 +1861,14 @@ async function initWebGPU() {
     layout: 'auto',
     compute: {
       module: gridBuildModule,
+      entryPoint: 'main',
+    },
+  });
+
+  const pheromoneUpdatePipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: pheromoneUpdateModule,
       entryPoint: 'main',
     },
   });
@@ -1684,30 +1965,62 @@ async function initWebGPU() {
   });
 
   const boidUpdateBindGroups = [
-    device.createBindGroup({
-      layout: boidUpdatePipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: boidBuffers[0] } },
-        { binding: 1, resource: { buffer: boidBuffers[1] } },
-        { binding: 2, resource: { buffer: predatorBuffer } },
-        { binding: 3, resource: { buffer: gridCellCountBuffer } },
-        { binding: 4, resource: { buffer: gridBoidIndexBuffer } },
-        { binding: 5, resource: { buffer: caughtFlagsBuffer } },
-        { binding: 6, resource: { buffer: paramsBuffer } },
-      ],
-    }),
-    device.createBindGroup({
-      layout: boidUpdatePipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: boidBuffers[1] } },
-        { binding: 1, resource: { buffer: boidBuffers[0] } },
-        { binding: 2, resource: { buffer: predatorBuffer } },
-        { binding: 3, resource: { buffer: gridCellCountBuffer } },
-        { binding: 4, resource: { buffer: gridBoidIndexBuffer } },
-        { binding: 5, resource: { buffer: caughtFlagsBuffer } },
-        { binding: 6, resource: { buffer: paramsBuffer } },
-      ],
-    }),
+    [
+      device.createBindGroup({
+        layout: boidUpdatePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[0] } },
+          { binding: 1, resource: { buffer: boidBuffers[1] } },
+          { binding: 2, resource: { buffer: predatorBuffer } },
+          { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
+          { binding: 4, resource: { buffer: gridCellCountBuffer } },
+          { binding: 5, resource: { buffer: gridBoidIndexBuffer } },
+          { binding: 6, resource: { buffer: caughtFlagsBuffer } },
+          { binding: 7, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+      device.createBindGroup({
+        layout: boidUpdatePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[0] } },
+          { binding: 1, resource: { buffer: boidBuffers[1] } },
+          { binding: 2, resource: { buffer: predatorBuffer } },
+          { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
+          { binding: 4, resource: { buffer: gridCellCountBuffer } },
+          { binding: 5, resource: { buffer: gridBoidIndexBuffer } },
+          { binding: 6, resource: { buffer: caughtFlagsBuffer } },
+          { binding: 7, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+    ],
+    [
+      device.createBindGroup({
+        layout: boidUpdatePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[1] } },
+          { binding: 1, resource: { buffer: boidBuffers[0] } },
+          { binding: 2, resource: { buffer: predatorBuffer } },
+          { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
+          { binding: 4, resource: { buffer: gridCellCountBuffer } },
+          { binding: 5, resource: { buffer: gridBoidIndexBuffer } },
+          { binding: 6, resource: { buffer: caughtFlagsBuffer } },
+          { binding: 7, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+      device.createBindGroup({
+        layout: boidUpdatePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[1] } },
+          { binding: 1, resource: { buffer: boidBuffers[0] } },
+          { binding: 2, resource: { buffer: predatorBuffer } },
+          { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
+          { binding: 4, resource: { buffer: gridCellCountBuffer } },
+          { binding: 5, resource: { buffer: gridBoidIndexBuffer } },
+          { binding: 6, resource: { buffer: caughtFlagsBuffer } },
+          { binding: 7, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+    ],
   ];
 
   const predatorUpdateBindGroups = [
@@ -1753,6 +2066,53 @@ async function initWebGPU() {
         { binding: 3, resource: { buffer: paramsBuffer } },
       ],
     }),
+  ];
+
+  const pheromoneUpdateBindGroups = [
+    [
+      device.createBindGroup({
+        layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[0] } },
+          { binding: 1, resource: { buffer: predatorBuffer } },
+          { binding: 2, resource: { buffer: pheromoneBuffers[0] } },
+          { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
+          { binding: 4, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+      device.createBindGroup({
+        layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[0] } },
+          { binding: 1, resource: { buffer: predatorBuffer } },
+          { binding: 2, resource: { buffer: pheromoneBuffers[1] } },
+          { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
+          { binding: 4, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+    ],
+    [
+      device.createBindGroup({
+        layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[1] } },
+          { binding: 1, resource: { buffer: predatorBuffer } },
+          { binding: 2, resource: { buffer: pheromoneBuffers[0] } },
+          { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
+          { binding: 4, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+      device.createBindGroup({
+        layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boidBuffers[1] } },
+          { binding: 1, resource: { buffer: predatorBuffer } },
+          { binding: 2, resource: { buffer: pheromoneBuffers[1] } },
+          { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
+          { binding: 4, resource: { buffer: paramsBuffer } },
+        ],
+      }),
+    ],
   ];
 
   const heatmapComputeBindGroups = [
@@ -1864,6 +2224,7 @@ async function initWebGPU() {
     boidBuffers,
     predatorBuffer,
     heatmapBuffers,
+    pheromoneBuffers,
     gridCellCountBuffer,
     gridBoidIndexBuffer,
     caughtFlagsBuffer,
@@ -1872,6 +2233,7 @@ async function initWebGPU() {
     predatorUpdatePipeline,
     gridClearPipeline,
     gridBuildPipeline,
+    pheromoneUpdatePipeline,
     clearCaughtPipeline,
     predatorResolvePipeline,
     heatmapComputePipeline,
@@ -1882,6 +2244,7 @@ async function initWebGPU() {
     predatorUpdateBindGroups,
     gridClearBindGroup,
     gridBuildBindGroups,
+    pheromoneUpdateBindGroups,
     heatmapComputeBindGroups,
     clearCaughtBindGroup,
     predatorResolveBindGroup,
@@ -1913,6 +2276,14 @@ function updateHeatmapControlLabels() {
   heatmapSamplesValue.textContent = config.heatmapSampleBudget.toFixed(0);
   heatmapTrendGainValue.textContent = config.heatmapTrendGain.toFixed(1);
   heatmapTrendDeadbandValue.textContent = config.heatmapTrendDeadband.toFixed(3);
+}
+
+function updateLifeFieldControlLabels() {
+  pherTrailWeightValue.textContent = config.pherTrailWeight.toFixed(2);
+  pherFearWeightValue.textContent = config.pherFearWeight.toFixed(2);
+  pherDiffusionValue.textContent = config.pherDiffusion.toFixed(2);
+  pherDecayValue.textContent = config.pherDecay.toFixed(2);
+  panicBoostValue.textContent = config.panicBoost.toFixed(2);
 }
 
 turnAccelRange.addEventListener('input', () => {
@@ -1961,6 +2332,31 @@ heatmapTrendDeadbandRange.addEventListener('input', () => {
   updateHeatmapControlLabels();
 });
 
+pherTrailWeightRange.addEventListener('input', () => {
+  config.pherTrailWeight = Number(pherTrailWeightRange.value);
+  updateLifeFieldControlLabels();
+});
+
+pherFearWeightRange.addEventListener('input', () => {
+  config.pherFearWeight = Number(pherFearWeightRange.value);
+  updateLifeFieldControlLabels();
+});
+
+pherDiffusionRange.addEventListener('input', () => {
+  config.pherDiffusion = Number(pherDiffusionRange.value);
+  updateLifeFieldControlLabels();
+});
+
+pherDecayRange.addEventListener('input', () => {
+  config.pherDecay = Number(pherDecayRange.value);
+  updateLifeFieldControlLabels();
+});
+
+panicBoostRange.addEventListener('input', () => {
+  config.panicBoost = Number(panicBoostRange.value);
+  updateLifeFieldControlLabels();
+});
+
 viewToggleButton.addEventListener('click', () => {
   renderMode = renderMode === 'boids' ? 'heatmap' : 'boids';
   updateViewToggleLabel();
@@ -1979,6 +2375,7 @@ turnAccelValue.textContent = turnAccelRange.value;
 minSpeedValue.textContent = Number(minSpeedRange.value).toFixed(2);
 predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(1);
 updateHeatmapControlLabels();
+updateLifeFieldControlLabels();
 updateViewToggleLabel();
 updatePerformancePanel();
 
