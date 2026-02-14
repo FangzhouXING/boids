@@ -29,6 +29,16 @@ const pherDecayRange = document.getElementById('pherDecayRange');
 const pherDecayValue = document.getElementById('pherDecayValue');
 const panicBoostRange = document.getElementById('panicBoostRange');
 const panicBoostValue = document.getElementById('panicBoostValue');
+const metabolismRange = document.getElementById('metabolismRange');
+const metabolismValue = document.getElementById('metabolismValue');
+const boidSprintBoostRange = document.getElementById('boidSprintBoostRange');
+const boidSprintBoostValue = document.getElementById('boidSprintBoostValue');
+const predatorSprintBoostRange = document.getElementById('predatorSprintBoostRange');
+const predatorSprintBoostValue = document.getElementById('predatorSprintBoostValue');
+const confusionStrengthRange = document.getElementById('confusionStrengthRange');
+const confusionStrengthValue = document.getElementById('confusionStrengthValue');
+const mutationRateRange = document.getElementById('mutationRateRange');
+const mutationRateValue = document.getElementById('mutationRateValue');
 const fpsValue = document.getElementById('fpsValue');
 const frameCpuValue = document.getElementById('frameCpuValue');
 const simCpuValue = document.getElementById('simCpuValue');
@@ -36,13 +46,13 @@ const heatmapCpuValue = document.getElementById('heatmapCpuValue');
 const renderCpuValue = document.getElementById('renderCpuValue');
 
 const FIXED_STEP = 1 / 60;
-const BOID_COUNT = 30000;
-const PREDATOR_COUNT = 5;
+const BOID_COUNT = 10000;
+const PREDATOR_COUNT = 3;
 const BOID_WORKGROUP_SIZE = 128;
 const CATCH_CLEAR_WORKGROUP_SIZE = 32;
 const HEATMAP_WORKGROUP_SIZE = 128;
 const GRID_WORKGROUP_SIZE = 128;
-const BOID_FLOATS = 8;
+const BOID_FLOATS = 12;
 const PREDATOR_FLOATS = 12;
 const PHEROMONE_FLOATS = 4;
 const GRID_CELL_SIZE = 72;
@@ -55,19 +65,32 @@ const HEATMAP_SAMPLE_BUDGET = 320;
 const HEATMAP_TREND_GAIN = 4.2;
 const HEATMAP_TREND_DEADBAND = 0.045;
 const HEATMAP_MAX_POINTS = 65536;
+const SIM_COUNTER_COUNT = 2;
+const BOID_STATS_SAMPLE_COUNT = 512;
+const ECOLOGY_READBACK_INTERVAL_MS = 260;
+const PHYS_SENSOR_ANGLE = (28 * Math.PI) / 180;
+const PHYS_SENSOR_OFFSET = 10.5;
+const PHYS_SENSOR_WIDTH = 1;
+const PHYS_ROTATE_ANGLE = (26 * Math.PI) / 180;
+const PHYS_STEP_SIZE = 1;
+const PHYS_DEPOSIT = 0.65;
+const PHYS_DIFFUSE_MIX = 0.36;
+const PHYS_DECAY = 0.05;
+const PHYS_MODE_REPEL = 0;
+const PHYS_NODE_SOURCE_STRENGTH = 0.08;
 
 const config = {
-  perceptionRadius: 72,
-  separationRadius: 22,
+  perceptionRadius: 92,
+  separationRadius: 18,
   predatorAvoidRadius: 125,
   maxSpeed: 1.7,
   minSpeed: Number(minSpeedRange.value),
   maxForce: 0.04,
-  maxTurnRate: (220 * Math.PI) / 180,
+  maxTurnRate: (Number(panicBoostRange?.value || 145) * Math.PI) / 180,
   maxTurnAcceleration: (Number(turnAccelRange.value) * Math.PI) / 180,
-  alignWeight: 0.85,
-  cohesionWeight: 0.65,
-  separationWeight: 1.35,
+  alignWeight: 0.34,
+  cohesionWeight: 0.07,
+  separationWeight: 0.52,
   predatorAvoidWeight: 2.4,
   predatorCatchRadius: 9,
   predatorSeparationRadius: 50,
@@ -75,9 +98,6 @@ const config = {
   predatorTurnRateFactor: 0.85,
   predatorTurnAccelerationFactor: 0.8,
   predatorSpeedFactor: 1.03,
-  predatorPostCatchPauseMinSeconds: 0,
-  predatorPostCatchPauseMaxSeconds: 0,
-  predatorPauseSlowdownSeconds: 0,
   predatorAttentionSeconds: Number(predatorAttentionRange.value),
   heatmapDotSpacingPx: Number(heatmapSpacingRange?.value || HEATMAP_DOT_SPACING),
   heatmapDotRadiusPx: Number(heatmapDotRadiusRange?.value || HEATMAP_DOT_RADIUS),
@@ -90,6 +110,21 @@ const config = {
   pherDiffusion: Number(pherDiffusionRange?.value || 0.28),
   pherDecay: Number(pherDecayRange?.value || 0.3),
   panicBoost: Number(panicBoostRange?.value || 1.2),
+  metabolismIntensity: Number(metabolismRange?.value || 1.0),
+  boidSprintBoost: Number(boidSprintBoostRange?.value || 0.9),
+  predatorSprintBoost: Number(predatorSprintBoostRange?.value || 1.05),
+  confusionStrength: Number(confusionStrengthRange?.value || 0.62),
+  mutationRate: Number(mutationRateRange?.value || 0.07),
+  physSensorAngle: PHYS_SENSOR_ANGLE,
+  physSensorOffset: Number(pherFearWeightRange?.value || 10.5),
+  physSensorWidth: PHYS_SENSOR_WIDTH,
+  physRotateAngle: PHYS_ROTATE_ANGLE,
+  physStepSize: PHYS_STEP_SIZE,
+  physDeposit: Number(pherTrailWeightRange?.value || 0.65),
+  physDiffuseMix: Number(pherDiffusionRange?.value || 0.36),
+  physDecay: Number(pherDecayRange?.value || 0.05),
+  physModeRepel: PHYS_MODE_REPEL,
+  physNodeSourceStrength: Number(predatorAttentionRange?.value || 0.08),
 };
 
 let worldWidth = 960;
@@ -119,17 +154,23 @@ const perfStats = {
   alpha: 0.15,
   lastPanelUpdate: 0,
 };
+const ecologyStats = {
+  avgSpeed: Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25)),
+  avgPredatorSpeed: 0,
+  movedFraction: 0,
+  movesPerSecond: 0,
+  blockedMoveRate: 0,
+  predatorSamples: [],
+  lastReadbackAtMs: 0,
+  lastCounterSampleAtMs: 0,
+  readbackPending: false,
+};
 
 const boidUpdateShader = `
 struct BoidState {
   posVel: vec4f,
   headingTurn: vec4f,
-};
-
-struct PredatorState {
-  posVel: vec4f,
-  headingTimers: vec4f,
-  aux: vec4f,
+  bio: vec4f,
 };
 
 struct PheromoneSample {
@@ -147,22 +188,26 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boidsIn: array<BoidState>;
 @group(0) @binding(1) var<storage, read_write> boidsOut: array<BoidState>;
-@group(0) @binding(2) var<storage, read> predators: array<PredatorState>;
 @group(0) @binding(3) var<storage, read> pheromones: array<PheromoneSample>;
-@group(0) @binding(4) var<storage, read_write> cellCounts: array<atomic<u32>>;
-@group(0) @binding(5) var<storage, read> cellBoids: array<u32>;
-@group(0) @binding(6) var<storage, read_write> caughtFlags: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> occupancyClaims: array<atomic<u32>>;
+@group(0) @binding(5) var<storage, read_write> cellCounts: array<atomic<u32>>;
+@group(0) @binding(6) var<storage, read> cellBoids: array<u32>;
 @group(0) @binding(7) var<uniform> params: SimParams;
+@group(0) @binding(8) var<storage, read_write> simCounters: array<atomic<u32>>;
 
 const TAU: f32 = 6.28318530718;
+const PHEROMONE_MAX_POINTS: u32 = ${HEATMAP_MAX_POINTS}u;
 const GRID_CELL_SIZE: f32 = ${GRID_CELL_SIZE.toFixed(1)};
 const GRID_MAX_CELLS: u32 = ${GRID_MAX_CELLS}u;
 const GRID_CELL_CAPACITY: u32 = ${GRID_CELL_CAPACITY}u;
-const PHEROMONE_MAX_POINTS: u32 = ${HEATMAP_MAX_POINTS}u;
+const MAX_CELL_SCAN: u32 = 24u;
+const COUNTER_MOVED: u32 = 0u;
+const COUNTER_BLOCKED: u32 = 1u;
 
 fn wrap_coordinate(value: f32, size: f32) -> f32 {
   var result = value;
@@ -207,14 +252,6 @@ fn read_pheromone_sample(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32)
   return pheromones[idx].values;
 }
 
-fn limit_magnitude(v: vec2f, maxLen: f32) -> vec2f {
-  let len = length(v);
-  if (len <= maxLen || len <= 0.000001) {
-    return v;
-  }
-  return v * (maxLen / len);
-}
-
 fn normalize_angle(angle: f32) -> f32 {
   var a = angle;
   while (a <= -3.14159265) {
@@ -230,14 +267,20 @@ fn shortest_angle_delta(currentAngle: f32, desiredAngle: f32) -> f32 {
   return normalize_angle(desiredAngle - currentAngle);
 }
 
-fn steer_towards(currentVel: vec2f, desiredDirection: vec2f, maxSpeed: f32, forceCap: f32) -> vec2f {
-  let mag = length(desiredDirection);
-  if (mag < 0.0001) {
+fn safe_normalize(v: vec2f) -> vec2f {
+  let len = length(v);
+  if (len <= 0.00001) {
     return vec2f(0.0, 0.0);
   }
-  let desired = normalize(desiredDirection) * maxSpeed;
-  let steer = desired - currentVel;
-  return limit_magnitude(steer, forceCap);
+  return v / len;
+}
+
+fn limit_magnitude(v: vec2f, maxLen: f32) -> vec2f {
+  let len = length(v);
+  if (len <= maxLen || len <= 0.00001) {
+    return v;
+  }
+  return v * (maxLen / len);
 }
 
 fn hash_u32(x: u32) -> u32 {
@@ -254,10 +297,27 @@ fn rand01(seed: u32) -> f32 {
   return f32(hash_u32(seed)) / 4294967295.0;
 }
 
+fn sensor_mean(sensorPos: vec2f, radius: i32, cols: u32, rows: u32, sampleCount: u32, spacing: f32) -> f32 {
+  if (sampleCount == 0u || spacing <= 0.0) {
+    return 0.0;
+  }
+  let baseX = i32(floor(sensorPos.x / spacing));
+  let baseY = i32(floor(sensorPos.y / spacing));
+  var sum = 0.0;
+  var count = 0.0;
+  for (var oy: i32 = -radius; oy <= radius; oy = oy + 1) {
+    for (var ox: i32 = -radius; ox <= radius; ox = ox + 1) {
+      let sample = read_pheromone_sample(baseX + ox, baseY + oy, cols, rows, sampleCount);
+      sum = sum + sample.x;
+      count = count + 1.0;
+    }
+  }
+  return sum / max(count, 1.0);
+}
+
 @compute @workgroup_size(${BOID_WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let boidCount = u32(params.counts.x);
-  let predatorCount = u32(params.counts.y);
   let index = gid.x;
   if (index >= boidCount) {
     return;
@@ -265,298 +325,186 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   let worldW = params.world.x;
   let worldH = params.world.y;
-  let dt = params.world.z;
+  let dt = max(params.world.z, 0.0001);
   let frameScale = params.world.w;
-  let simTime = f32(params.counts.z) * dt;
-  let cols = max(1u, u32(ceil(worldW / GRID_CELL_SIZE)));
-  let rows = max(1u, u32(ceil(worldH / GRID_CELL_SIZE)));
-  let gridCellCount = min(GRID_MAX_CELLS, cols * rows);
+
   let pherSpacing = max(params.heatmapA.x, 0.75);
   let pherCols = max(1u, u32(floor(worldW / pherSpacing)));
   let pherRows = max(1u, u32(floor(worldH / pherSpacing)));
   let pherCount = min(PHEROMONE_MAX_POINTS, pherCols * pherRows);
 
-  let perceptionSq = params.boidA.x * params.boidA.x;
-  let separationSq = params.boidA.y * params.boidA.y;
-  let predatorAvoidSq = params.boidA.z * params.boidA.z;
-  let catchSq = params.boidA.w * params.boidA.w;
+  let gridCols = max(1u, u32(ceil(worldW / GRID_CELL_SIZE)));
+  let gridRows = max(1u, u32(ceil(worldH / GRID_CELL_SIZE)));
+  let gridCount = min(GRID_MAX_CELLS, gridCols * gridRows);
 
-  let maxSpeed = params.boidB.x;
-  let minSpeed = params.boidB.y;
-  let maxForce = params.boidB.z;
-  let maxTurnRate = params.boidB.w;
-
-  let maxTurnAcceleration = params.boidC.x;
-  let alignWeight = params.boidC.y;
-  let cohesionWeight = params.boidC.z;
-  let separationWeight = params.boidC.w;
-
-  let predatorAvoidWeight = params.predatorA.x;
-  let trailWeight = params.lifeA.x;
-  let fearWeight = params.lifeA.y;
-  let panicBoost = params.lifeA.z;
+  let sensorAngle = params.boidA.x;
+  let sensorOffset = params.boidA.y;
+  let sensorWidth = max(1.0, params.boidA.z);
+  let cruiseSpeed = max(0.05, params.boidA.w);
+  let maxTurnRate = max(0.05, params.boidB.x);
+  let alignmentWeight = max(0.0, params.boidB.y);
+  let maxTurnAcceleration = max(0.05, params.boidC.x);
+  let cohesionWeight = max(0.0, params.boidC.y);
+  let separationWeight = max(0.0, params.boidC.z);
+  let trailWeight = max(0.0, params.boidC.w);
+  let perceptionRadius = max(10.0, params.predatorA.z);
+  let separationRadius = max(5.0, params.predatorA.w);
+  let perceptionRadiusSq = perceptionRadius * perceptionRadius;
+  let separationRadiusSq = separationRadius * separationRadius;
+  let sensorRadius = i32(max(0.0, floor(sensorWidth * 0.5)));
 
   var me = boidsIn[index];
   let mePos = me.posVel.xy;
-  let meVel = me.posVel.zw;
-  let meCellX = i32(min(cols - 1u, u32(floor(mePos.x / GRID_CELL_SIZE))));
-  let meCellY = i32(min(rows - 1u, u32(floor(mePos.y / GRID_CELL_SIZE))));
-  let cellRange = i32(max(1.0, ceil(params.boidA.x / GRID_CELL_SIZE)));
+  let heading = me.headingTurn.x;
+  let currentTurnRate = me.headingTurn.w;
 
-  var align = vec2f(0.0, 0.0);
-  var cohesion = vec2f(0.0, 0.0);
-  var separation = vec2f(0.0, 0.0);
-  var neighbors = 0u;
-
-  let pherX = i32(min(pherCols - 1u, u32(floor(mePos.x / pherSpacing))));
-  let pherY = i32(min(pherRows - 1u, u32(floor(mePos.y / pherSpacing))));
-  let pherCenter = read_pheromone_sample(pherX, pherY, pherCols, pherRows, pherCount);
-  let pherRight = read_pheromone_sample(pherX + 1, pherY, pherCols, pherRows, pherCount);
-  let pherLeft = read_pheromone_sample(pherX - 1, pherY, pherCols, pherRows, pherCount);
-  let pherDown = read_pheromone_sample(pherX, pherY + 1, pherCols, pherRows, pherCount);
-  let pherUp = read_pheromone_sample(pherX, pherY - 1, pherCols, pherRows, pherCount);
-  let trailGradient = vec2f(pherRight.x - pherLeft.x, pherDown.x - pherUp.x);
-  let fearGradient = vec2f(pherRight.y - pherLeft.y, pherDown.y - pherUp.y);
-  let foodGradient = vec2f(pherRight.z - pherLeft.z, pherDown.z - pherUp.z);
-  let hazardGradient = vec2f(pherRight.w - pherLeft.w, pherDown.w - pherUp.w);
-  var panic = clamp((pherCenter.y + pherCenter.w * 0.65) * panicBoost, 0.0, 1.0);
-  let fieldFoodWeight = 0.82;
-  let fieldHazardWeight = 1.28;
-
-  let seasonalPhase = 0.5 + 0.5 * sin(simTime * 0.19);
-  let socialPulse = 0.5 + 0.5 * sin(simTime * 0.31 + f32(index) * 0.002);
-  let migratoryAnchor = vec2f(
-    (0.5 + 0.34 * sin(simTime * 0.11 + 1.3)) * worldW,
-    (0.5 + 0.29 * sin(simTime * 0.13 - 0.9)) * worldH,
-  );
-  let anchorDelta = vec2f(
-    wrapped_delta(mePos.x, migratoryAnchor.x, worldW),
-    wrapped_delta(mePos.y, migratoryAnchor.y, worldH),
-  );
-  let flowAngle = sin((mePos.y / max(worldH, 1.0)) * TAU * 2.0 + simTime * 0.61) * 1.3 +
-    cos((mePos.x / max(worldW, 1.0)) * TAU * 1.7 - simTime * 0.49);
-  let currentDir = vec2f(cos(flowAngle), sin(flowAngle));
-
-  for (var oy: i32 = -cellRange; oy <= cellRange; oy = oy + 1) {
-    let ny = wrap_index(meCellY + oy, i32(rows));
-    for (var ox: i32 = -cellRange; ox <= cellRange; ox = ox + 1) {
-      let nx = wrap_index(meCellX + ox, i32(cols));
-      let cellIndex = ny * cols + nx;
-      if (cellIndex >= gridCellCount) {
+  let cx = min(gridCols - 1u, u32(floor(mePos.x / GRID_CELL_SIZE)));
+  let cy = min(gridRows - 1u, u32(floor(mePos.y / GRID_CELL_SIZE)));
+  var neighborCount: u32 = 0u;
+  var closeCount: u32 = 0u;
+  var cohesionOffsetSum = vec2f(0.0, 0.0);
+  var separationSum = vec2f(0.0, 0.0);
+  var alignmentSum = vec2f(0.0, 0.0);
+  for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
+    let ny = wrap_index(i32(cy) + oy, i32(gridRows));
+    for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
+      let nx = wrap_index(i32(cx) + ox, i32(gridCols));
+      let rawCellIndex = ny * gridCols + nx;
+      if (rawCellIndex >= gridCount) {
         continue;
       }
-
-      let count = min(atomicLoad(&cellCounts[cellIndex]), GRID_CELL_CAPACITY);
-      for (var n: u32 = 0u; n < count; n = n + 1u) {
-        let j = cellBoids[cellIndex * GRID_CELL_CAPACITY + n];
-        if (j == index || j >= boidCount) {
+      let cellCount = min(atomicLoad(&cellCounts[rawCellIndex]), min(MAX_CELL_SCAN, GRID_CELL_CAPACITY));
+      let baseOffset = rawCellIndex * GRID_CELL_CAPACITY;
+      for (var slot: u32 = 0u; slot < cellCount; slot = slot + 1u) {
+        let neighborIndex = cellBoids[baseOffset + slot];
+        if (neighborIndex == index || neighborIndex >= boidCount) {
           continue;
         }
-
-        let other = boidsIn[j];
+        let other = boidsIn[neighborIndex];
         let dx = wrapped_delta(mePos.x, other.posVel.x, worldW);
         let dy = wrapped_delta(mePos.y, other.posVel.y, worldH);
         let delta = vec2f(dx, dy);
         let distSq = dot(delta, delta);
-
-        if (distSq <= 0.0 || distSq > perceptionSq) {
+        if (distSq <= 0.0001 || distSq > perceptionRadiusSq) {
           continue;
         }
-
-        neighbors = neighbors + 1u;
-        align = align + other.posVel.zw;
-        cohesion = cohesion + delta;
-
-        if (distSq < separationSq) {
-          let invDist = inverseSqrt(max(distSq, 0.0001));
-          separation = separation - delta * invDist;
+        neighborCount = neighborCount + 1u;
+        cohesionOffsetSum = cohesionOffsetSum + delta;
+        alignmentSum = alignmentSum + safe_normalize(other.posVel.zw);
+        if (distSq < separationRadiusSq) {
+          let dist = sqrt(distSq);
+          let away = -delta / max(dist, 0.0001);
+          let weight = 1.0 - dist / separationRadius;
+          separationSum = separationSum + away * weight;
+          closeCount = closeCount + 1u;
         }
       }
     }
   }
 
-  var predatorAvoid = vec2f(0.0, 0.0);
-  var predatorThreats = 0u;
-
-  for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
-    let predator = predators[p];
-    let dx = wrapped_delta(mePos.x, predator.posVel.x, worldW);
-    let dy = wrapped_delta(mePos.y, predator.posVel.y, worldH);
-    let delta = vec2f(dx, dy);
-    let distSq = dot(delta, delta);
-
-    if (distSq <= 0.0 || distSq > predatorAvoidSq) {
-      continue;
-    }
-
-    let invDist = inverseSqrt(max(distSq, 0.0001));
-    predatorAvoid = predatorAvoid - delta * invDist;
-    predatorThreats = predatorThreats + 1u;
+  var cohesionVec = vec2f(0.0, 0.0);
+  var alignmentVec = vec2f(0.0, 0.0);
+  if (neighborCount > 0u) {
+    cohesionVec = safe_normalize(cohesionOffsetSum / f32(neighborCount));
+    alignmentVec = safe_normalize(alignmentSum / f32(neighborCount));
   }
-
-  var desiredVel = meVel;
-
-  if (neighbors > 0u) {
-    let n = f32(neighbors);
-    align = align / n;
-    cohesion = cohesion / n;
-    separation = separation / n;
-
-    let alignScale = mix(1.0, 0.55, panic) * (0.85 + 0.30 * socialPulse);
-    let cohesionScale = mix(1.0, 0.45, panic) * (0.70 + 0.45 * socialPulse);
-    let separationScale = (1.0 + panic * 1.65) * (0.85 + 0.55 * (1.0 - socialPulse));
-
-    let alignSteer = steer_towards(meVel, align, maxSpeed, maxForce);
-    let cohesionSteer = steer_towards(meVel, cohesion, maxSpeed, maxForce);
-    let separationSteer = steer_towards(meVel, separation, maxSpeed, maxForce * 1.6);
-
-    desiredVel = desiredVel + alignSteer * alignWeight * alignScale;
-    desiredVel = desiredVel + cohesionSteer * cohesionWeight * cohesionScale;
-    desiredVel = desiredVel + separationSteer * separationWeight * separationScale;
+  var separationVec = vec2f(0.0, 0.0);
+  if (closeCount > 0u) {
+    separationVec = separationSum / f32(closeCount);
   }
+  separationVec = limit_magnitude(separationVec, 1.0);
 
-  if (predatorThreats > 0u) {
-    let t = f32(predatorThreats);
-    predatorAvoid = predatorAvoid / t;
-    let predatorSteer = steer_towards(meVel, predatorAvoid, maxSpeed, maxForce * 2.2);
-    desiredVel = desiredVel + predatorSteer * predatorAvoidWeight * (1.0 + panic * 1.6);
-    panic = max(panic, clamp(f32(predatorThreats) * 0.45, 0.0, 1.0));
+  let dirF = vec2f(cos(heading), sin(heading));
+  let dirL = vec2f(cos(heading + sensorAngle), sin(heading + sensorAngle));
+  let dirR = vec2f(cos(heading - sensorAngle), sin(heading - sensorAngle));
+  let sensorPosF = vec2f(
+    wrap_coordinate(mePos.x + dirF.x * sensorOffset, worldW),
+    wrap_coordinate(mePos.y + dirF.y * sensorOffset, worldH),
+  );
+  let sensorPosL = vec2f(
+    wrap_coordinate(mePos.x + dirL.x * sensorOffset, worldW),
+    wrap_coordinate(mePos.y + dirL.y * sensorOffset, worldH),
+  );
+  let sensorPosR = vec2f(
+    wrap_coordinate(mePos.x + dirR.x * sensorOffset, worldW),
+    wrap_coordinate(mePos.y + dirR.y * sensorOffset, worldH),
+  );
+  let F = sensor_mean(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing);
+  let FL = sensor_mean(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing);
+  let FR = sensor_mean(sensorPosR, sensorRadius, pherCols, pherRows, pherCount, pherSpacing);
+  let meCellX = i32(floor(mePos.x / pherSpacing));
+  let meCellY = i32(floor(mePos.y / pherSpacing));
+  let trailLeft = read_pheromone_sample(meCellX - 1, meCellY, pherCols, pherRows, pherCount).x;
+  let trailRight = read_pheromone_sample(meCellX + 1, meCellY, pherCols, pherRows, pherCount).x;
+  let trailUp = read_pheromone_sample(meCellX, meCellY - 1, pherCols, pherRows, pherCount).x;
+  let trailDown = read_pheromone_sample(meCellX, meCellY + 1, pherCols, pherRows, pherCount).x;
+  let antiTrailGradient = safe_normalize(vec2f(trailLeft - trailRight, trailUp - trailDown));
+  let trailVec = safe_normalize(dirF * F + dirL * FL + dirR * FR);
+  let trailLevel = max(0.0, (F + FL + FR) * 0.33333334);
+  let trailSaturation = smoothstep(0.85, 2.8, trailLevel);
+  let lowTrail = 1.0 - smoothstep(0.08, 0.65, trailLevel);
+  let congestion = smoothstep(0.42, 1.6, trailLevel);
+  let sideImbalance = clamp((FL - FR) / max(F + FL + FR, 0.0001), -1.0, 1.0);
+  let lateral = vec2f(-dirF.y, dirF.x);
+  let trailSteerVec = safe_normalize(trailVec + lateral * sideImbalance * 0.75);
+  let forward = dirF;
+  let seed = u32(params.counts.z) * 1664525u + index * 1013904223u + 23u;
+  let jitterAngle = (rand01(seed) - 0.5) * 0.45;
+  let jitterVec = vec2f(cos(heading + jitterAngle), sin(heading + jitterAngle));
+  let trailInfluence = trailWeight / (1.0 + trailLevel * 0.7);
+
+  var desiredDir = forward * 0.28;
+  desiredDir = desiredDir + alignmentVec * alignmentWeight;
+  desiredDir = desiredDir + cohesionVec * cohesionWeight;
+  desiredDir = desiredDir + separationVec * separationWeight;
+  desiredDir = desiredDir + trailSteerVec * trailInfluence;
+  desiredDir = desiredDir - trailSteerVec * trailSaturation * 0.56;
+  desiredDir = desiredDir + antiTrailGradient * congestion * 0.95;
+  desiredDir = desiredDir + lateral * sideImbalance * congestion * 0.35;
+  desiredDir = desiredDir + forward * trailSaturation * 0.14;
+  desiredDir = desiredDir + jitterVec * (0.04 + lowTrail * 0.14);
+  if (length(desiredDir) <= 0.00001) {
+    desiredDir = forward;
   }
-
-  let currentSteer = steer_towards(meVel, currentDir, maxSpeed, maxForce * 0.9);
-  let migrationSteer = steer_towards(meVel, anchorDelta, maxSpeed, maxForce * 0.95);
-  desiredVel = desiredVel + currentSteer * (0.20 + 0.30 * seasonalPhase);
-  desiredVel = desiredVel + migrationSteer * (0.10 + 0.26 * seasonalPhase) * (1.0 - panic * 0.55);
-
-  if (dot(trailGradient, trailGradient) > 0.000001) {
-    let trailSteer = steer_towards(meVel, trailGradient, maxSpeed, maxForce);
-    desiredVel = desiredVel + trailSteer * trailWeight * (1.0 - panic);
-  }
-
-  if (dot(fearGradient, fearGradient) > 0.000001) {
-    let fearSteer = steer_towards(meVel, -fearGradient, maxSpeed, maxForce * 1.7);
-    desiredVel = desiredVel + fearSteer * fearWeight;
-  }
-
-  if (dot(foodGradient, foodGradient) > 0.000001) {
-    let foodSteer = steer_towards(meVel, foodGradient, maxSpeed, maxForce * 0.95);
-    desiredVel = desiredVel + foodSteer * fieldFoodWeight * (1.0 - panic * 0.35);
-  }
-
-  if (dot(hazardGradient, hazardGradient) > 0.000001) {
-    let hazardSteer = steer_towards(meVel, -hazardGradient, maxSpeed, maxForce * 2.0);
-    desiredVel = desiredVel + hazardSteer * fieldHazardWeight;
-    panic = max(panic, clamp(length(hazardGradient) * 0.22, 0.0, 1.0));
-  }
-
-  if (panic > 0.2) {
-    let panicDrift = vec2f(
-      cos(simTime * 1.75 + f32(index) * 0.017),
-      sin(simTime * 1.51 + f32(index) * 0.013),
-    );
-    desiredVel = desiredVel + panicDrift * (maxForce * panic * 0.35);
-  }
-
-  let desiredLimited = limit_magnitude(desiredVel, maxSpeed);
-  let desiredSpeed = length(desiredLimited);
-  let panicMinSpeed = min(maxSpeed, minSpeed + panic * 0.7);
-  let speed = clamp(desiredSpeed, panicMinSpeed, maxSpeed);
-
-  let currentHeading = me.headingTurn.x;
-  let currentTurnRate = me.headingTurn.y;
-  let targetHeading = select(currentHeading, atan2(desiredLimited.y, desiredLimited.x), desiredSpeed > 0.0001);
-  let headingDelta = shortest_angle_delta(currentHeading, targetHeading);
-  let desiredTurnRate = headingDelta / max(dt, 0.0001);
-  let turnRateError = desiredTurnRate - currentTurnRate;
-  let maxRateDelta = maxTurnAcceleration * dt;
-  var nextTurnRate = currentTurnRate + clamp(turnRateError, -maxRateDelta, maxRateDelta);
+  let desiredHeading = atan2(desiredDir.y, desiredDir.x);
+  let headingDelta = shortest_angle_delta(heading, desiredHeading);
+  let desiredTurnRate = clamp(headingDelta / dt, -maxTurnRate, maxTurnRate);
+  let turnRateDeltaLimit = maxTurnAcceleration * dt;
+  var nextTurnRate = currentTurnRate + clamp(
+    desiredTurnRate - currentTurnRate,
+    -turnRateDeltaLimit,
+    turnRateDeltaLimit,
+  );
   nextTurnRate = clamp(nextTurnRate, -maxTurnRate, maxTurnRate);
-  var nextHeading = normalize_angle(currentHeading + nextTurnRate * dt);
+  nextTurnRate = nextTurnRate * 0.9;
+  let nextHeading = normalize_angle(heading + nextTurnRate * dt);
 
-  var nextVel = vec2f(cos(nextHeading), sin(nextHeading)) * speed;
-  var nextPos = mePos + nextVel * frameScale;
-  nextPos = vec2f(wrap_coordinate(nextPos.x, worldW), wrap_coordinate(nextPos.y, worldH));
+  let crowdFactor = clamp(f32(closeCount) / 6.0, 0.0, 1.0);
+  let nextSpeed = cruiseSpeed * mix(1.0, 0.78, crowdFactor);
+  let moveDir = vec2f(cos(nextHeading), sin(nextHeading));
+  let nextVel = moveDir * nextSpeed;
+  let nextPos = vec2f(
+    wrap_coordinate(mePos.x + nextVel.x * frameScale, worldW),
+    wrap_coordinate(mePos.y + nextVel.y * frameScale, worldH),
+  );
 
-  let portalPhase = simTime * 0.27;
-  let portalRadius = 18.0;
-  let portalRadiusSq = portalRadius * portalRadius;
-  let portalA = vec2f(
-    (0.5 + 0.37 * sin(portalPhase + 0.4)) * worldW,
-    (0.5 + 0.31 * cos(portalPhase * 1.17 - 0.7)) * worldH,
-  );
-  let portalB = vec2f(
-    (0.5 + 0.35 * sin(portalPhase + 3.14159)) * worldW,
-    (0.5 + 0.29 * cos(portalPhase * 1.19 + 2.2)) * worldH,
-  );
-  let portalDeltaA = vec2f(
-    wrapped_delta(nextPos.x, portalA.x, worldW),
-    wrapped_delta(nextPos.y, portalA.y, worldH),
-  );
-  let portalDeltaB = vec2f(
-    wrapped_delta(nextPos.x, portalB.x, worldW),
-    wrapped_delta(nextPos.y, portalB.y, worldH),
-  );
-  let enterA = dot(portalDeltaA, portalDeltaA) < portalRadiusSq;
-  let enterB = dot(portalDeltaB, portalDeltaB) < portalRadiusSq;
-  if (enterA || enterB) {
-    let gateSeed = u32(params.counts.z) * 1103515245u + index * 2246822519u + 97u;
-    if (rand01(gateSeed) > 0.34) {
-      let targetPortal = select(portalA, portalB, enterA);
-      let offsetAngle = rand01(gateSeed + 13u) * TAU;
-      let offsetRadius = portalRadius * (0.45 + 0.5 * rand01(gateSeed + 23u));
-      let offset = vec2f(cos(offsetAngle), sin(offsetAngle)) * offsetRadius;
-      nextPos = vec2f(
-        wrap_coordinate(targetPortal.x + offset.x, worldW),
-        wrap_coordinate(targetPortal.y + offset.y, worldH),
-      );
-      let velBlend = nextVel + offset * 0.12;
-      let velLen = length(velBlend);
-      if (velLen > 0.0001) {
-        let boostedSpeed = clamp(speed * (0.94 + 0.45 * rand01(gateSeed + 37u)), minSpeed, maxSpeed);
-        nextVel = velBlend * (boostedSpeed / velLen);
-        nextHeading = atan2(nextVel.y, nextVel.x);
-      }
-    }
+  let targetCellX = min(pherCols - 1u, u32(floor(nextPos.x / pherSpacing)));
+  let targetCellY = min(pherRows - 1u, u32(floor(nextPos.y / pherSpacing)));
+  let targetIndex = targetCellY * pherCols + targetCellX;
+  if (targetIndex < pherCount) {
+    atomicAdd(&occupancyClaims[targetIndex], 1u);
   }
 
-  var caught = false;
-  var caughtBy = 0u;
-  for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
-    let predator = predators[p];
-    if (predator.headingTimers.z > 0.0) {
-      continue;
-    }
-    let dx = wrapped_delta(nextPos.x, predator.posVel.x, worldW);
-    let dy = wrapped_delta(nextPos.y, predator.posVel.y, worldH);
-    if (dx * dx + dy * dy <= catchSq) {
-      caught = true;
-      caughtBy = p;
-      break;
-    }
+  atomicAdd(&simCounters[COUNTER_MOVED], 1u);
+  if (closeCount > 2u) {
+    atomicAdd(&simCounters[COUNTER_BLOCKED], 1u);
   }
 
-  var outState = BoidState(vec4f(nextPos, nextVel), vec4f(nextHeading, nextTurnRate, 0.0, 0.0));
-
-  if (caught) {
-    atomicStore(&caughtFlags[caughtBy], 1u);
-
-    let frameSeed = u32(params.counts.z);
-    let seed0 = frameSeed * 1664525u + (index + 1u) * 1013904223u + 17u;
-    let seed1 = frameSeed * 22695477u + (index + 1u) * 747796405u + 31u;
-    let seed2 = frameSeed * 1103515245u + (index + 1u) * 2891336453u + 71u;
-    let seed3 = frameSeed * 2246822519u + (index + 1u) * 3266489917u + 127u;
-
-    let rx = rand01(seed0);
-    let ry = rand01(seed1);
-    let rHeading = rand01(seed2) * TAU;
-    let rSpeed = minSpeed + (maxSpeed - minSpeed) * rand01(seed3);
-
-    let respawnPos = vec2f(rx * worldW, ry * worldH);
-    let respawnVel = vec2f(cos(rHeading), sin(rHeading)) * rSpeed;
-    outState = BoidState(vec4f(respawnPos, respawnVel), vec4f(rHeading, 0.0, 0.0, 0.0));
-  }
-
-  boidsOut[index] = outState;
+  boidsOut[index] = BoidState(
+    vec4f(nextPos, nextVel),
+    vec4f(nextHeading, 1.0, 1.0 - crowdFactor * 0.5, nextTurnRate),
+    me.bio,
+  );
 }
 `;
 
@@ -564,6 +512,7 @@ const predatorUpdateShader = `
 struct BoidState {
   posVel: vec4f,
   headingTurn: vec4f,
+  bio: vec4f,
 };
 
 struct PredatorState {
@@ -583,6 +532,7 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boidsIn: array<BoidState>;
@@ -648,8 +598,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let predatorSeparationRadiusSq = params.predatorA.z * params.predatorA.z;
   let predatorSeparationWeight = params.predatorA.w;
 
-  let pauseSlowdownSeconds = max(params.predatorB.x, 0.0001);
-  let predatorSpeed = params.boidB.x * params.predatorB.y;
+  let predatorSprintBoost = max(params.predatorB.x, 0.0);
+  let predatorCruiseSpeed = params.boidB.x * params.predatorB.y;
   let predatorMaxTurnRate = params.predatorB.z;
   let predatorMaxTurnAcceleration = params.predatorB.w;
 
@@ -661,27 +611,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
     var pred = snapshot[p];
-
-    if (pred.headingTimers.z > 0.0) {
-      let pauseStep = min(dt, pred.headingTimers.z);
-      pred.headingTimers.z = max(0.0, pred.headingTimers.z - pauseStep);
-
-      var pauseVel = vec2f(0.0, 0.0);
-      if (pred.headingTimers.w > 0.0) {
-        pred.headingTimers.w = max(0.0, pred.headingTimers.w - pauseStep);
-        let slowdownFactor = pred.headingTimers.w / pauseSlowdownSeconds;
-        pauseVel = pred.aux.xy * slowdownFactor;
-        pred.posVel.x = wrap_coordinate(pred.posVel.x + pauseVel.x * (pauseStep * 60.0), worldW);
-        pred.posVel.y = wrap_coordinate(pred.posVel.y + pauseVel.y * (pauseStep * 60.0), worldH);
-      }
-
-      pred.posVel.z = pauseVel.x;
-      pred.posVel.w = pauseVel.y;
-      pred.aux.w = 0.0;
-      predators[p] = pred;
-      continue;
-    }
-
+    let isApex = pred.aux.y > 0.5;
+    pred.headingTimers.w = max(0.0, pred.headingTimers.w - dt);
+    pred.aux.x = max(0.0, pred.aux.x - dt);
     pred.headingTimers.y = pred.headingTimers.y - dt;
 
     var targetIndex: i32 = i32(round(pred.aux.z));
@@ -690,26 +622,43 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       var closest: u32 = 0u;
       for (var b: u32 = 0u; b < boidCount; b = b + 1u) {
         let boid = boidsIn[b];
+        let boidSpecies = boid.bio.w;
+        let prefersForager = boidSpecies < 0.5;
+        let preference = select(
+          select(0.86, 1.22, prefersForager),
+          select(1.18, 0.82, prefersForager),
+          isApex,
+        );
         let dx = wrapped_delta(pred.posVel.x, boid.posVel.x, worldW);
         let dy = wrapped_delta(pred.posVel.y, boid.posVel.y, worldH);
         let distSq = dx * dx + dy * dy;
-        if (distSq < bestDistSq) {
-          bestDistSq = distSq;
+        let weighted = distSq / max(preference, 0.2);
+        if (weighted < bestDistSq) {
+          bestDistSq = weighted;
           closest = b;
         }
       }
       targetIndex = i32(closest);
-      pred.headingTimers.y = attentionSeconds;
+      pred.headingTimers.y = attentionSeconds * select(1.0, 1.3, isApex);
     }
 
     var chaseDir = vec2f(cos(pred.headingTimers.x), sin(pred.headingTimers.x));
+    var targetDistance = 1e9;
     if (targetIndex >= 0 && targetIndex < i32(boidCount)) {
       let prey = boidsIn[u32(targetIndex)];
       let tx = wrapped_delta(pred.posVel.x, prey.posVel.x, worldW);
       let ty = wrapped_delta(pred.posVel.y, prey.posVel.y, worldH);
-      let tLen = length(vec2f(tx, ty));
+      let toPrey = vec2f(tx, ty);
+      let tLen = length(toPrey);
+      targetDistance = tLen;
       if (tLen > 0.0001) {
-        chaseDir = vec2f(tx, ty) / tLen;
+        let leadTime = clamp(tLen / max(predatorCruiseSpeed * 60.0, 0.0001) * 0.75, 0.0, 0.55);
+        let led = toPrey + prey.posVel.zw * (leadTime * 60.0);
+        if (length(led) > 0.0001) {
+          chaseDir = normalize(led);
+        } else {
+          chaseDir = toPrey / tLen;
+        }
       }
     }
 
@@ -741,12 +690,35 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       desiredHeading = atan2(desiredDir.y, desiredDir.x);
     }
 
+    let strikeWindow = clamp(1.0 - targetDistance / max(params.boidA.z * select(1.3, 1.5, isApex), 1.0), 0.0, 1.0);
+    let canStrike = targetIndex >= 0 && pred.headingTimers.w <= 0.0 && pred.headingTimers.z > 0.22;
+    if (canStrike && strikeWindow > 0.36) {
+      pred.aux.x = (0.28 + 0.24 * predatorSprintBoost) * select(1.0, 1.35, isApex);
+      pred.headingTimers.w = 0.9 + 0.55 * (1.0 - pred.headingTimers.z) * select(1.0, 1.2, isApex);
+    }
+    let sprintActive = pred.aux.x > 0.0;
+    let staminaDelta = select(
+      dt * 0.26 * select(1.0, 0.8, isApex),
+      -dt * (0.48 + 0.22 * predatorSprintBoost) * select(1.0, 1.15, isApex),
+      sprintActive,
+    );
+    pred.headingTimers.z = clamp(pred.headingTimers.z + staminaDelta, 0.0, 1.0);
+    let fatigueFactor = mix(select(0.64, 0.55, isApex), 1.0, pred.headingTimers.z);
+    let sprintFactor = select(
+      1.0,
+      1.0 + predatorSprintBoost * (0.4 + 0.4 * pred.headingTimers.z) * select(1.0, 1.45, isApex),
+      sprintActive,
+    );
+    let apexCruiseScale = select(1.0, 0.86, isApex);
+    let predatorSpeed = predatorCruiseSpeed * apexCruiseScale * fatigueFactor * sprintFactor;
+
     let headingDelta = shortest_angle_delta(pred.headingTimers.x, desiredHeading);
     let desiredTurnRate = headingDelta / max(dt, 0.0001);
     let turnRateError = desiredTurnRate - pred.aux.w;
-    let maxRateDelta = predatorMaxTurnAcceleration * dt;
+    let turnBoost = select(1.0, 1.0 + 0.28 * predatorSprintBoost, sprintActive);
+    let maxRateDelta = predatorMaxTurnAcceleration * turnBoost * dt;
     var nextTurnRate = pred.aux.w + clamp(turnRateError, -maxRateDelta, maxRateDelta);
-    nextTurnRate = clamp(nextTurnRate, -predatorMaxTurnRate, predatorMaxTurnRate);
+    nextTurnRate = clamp(nextTurnRate, -predatorMaxTurnRate * turnBoost, predatorMaxTurnRate * turnBoost);
     let nextHeading = normalize_angle(pred.headingTimers.x + nextTurnRate * dt);
 
     pred.headingTimers.x = nextHeading;
@@ -775,10 +747,39 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 }
 `;
 
+const occupancyClearShader = `
+struct SimParams {
+  world: vec4f,
+  counts: vec4f,
+  boidA: vec4f,
+  boidB: vec4f,
+  boidC: vec4f,
+  predatorA: vec4f,
+  predatorB: vec4f,
+  heatmapA: vec4f,
+  heatmapB: vec4f,
+  lifeA: vec4f,
+  lifeB: vec4f,
+};
+
+@group(0) @binding(0) var<storage, read_write> occupancyClaims: array<atomic<u32>>;
+@group(0) @binding(1) var<uniform> params: SimParams;
+
+@compute @workgroup_size(${HEATMAP_WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let sampleCount = u32(params.counts.w);
+  if (gid.x >= sampleCount || gid.x >= ${HEATMAP_MAX_POINTS}u) {
+    return;
+  }
+  atomicStore(&occupancyClaims[gid.x], 0u);
+}
+`;
+
 const gridBuildShader = `
 struct BoidState {
   posVel: vec4f,
   headingTurn: vec4f,
+  bio: vec4f,
 };
 
 struct SimParams {
@@ -792,6 +793,7 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boids: array<BoidState>;
@@ -833,17 +835,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 const pheromoneUpdateShader = `
-struct BoidState {
-  posVel: vec4f,
-  headingTurn: vec4f,
-};
-
-struct PredatorState {
-  posVel: vec4f,
-  headingTimers: vec4f,
-  aux: vec4f,
-};
-
 struct PheromoneSample {
   values: vec4f,
 };
@@ -859,16 +850,16 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
-@group(0) @binding(0) var<storage, read> boids: array<BoidState>;
-@group(0) @binding(1) var<storage, read> predators: array<PredatorState>;
 @group(0) @binding(2) var<storage, read> pheromonePrev: array<PheromoneSample>;
 @group(0) @binding(3) var<storage, read_write> pheromoneNext: array<PheromoneSample>;
 @group(0) @binding(4) var<uniform> params: SimParams;
+@group(0) @binding(5) var<storage, read_write> occupancyClaims: array<atomic<u32>>;
 
 const PHEROMONE_MAX_POINTS: u32 = ${HEATMAP_MAX_POINTS}u;
-const MAX_BOID_SAMPLES: u32 = 192u;
+const TAU: f32 = 6.28318530718;
 
 fn wrap_index(value: i32, size: i32) -> u32 {
   var v = value % size;
@@ -916,114 +907,53 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   let worldW = params.world.x;
   let worldH = params.world.y;
-  let boidCount = max(1u, u32(params.counts.x));
-  let predatorCount = u32(params.counts.y);
-  let dt = params.world.z;
   let spacing = max(params.heatmapA.x, 0.75);
-  let diffuseRadius = max(params.heatmapA.z, 2.0);
-  let diffuseRadiusSq = diffuseRadius * diffuseRadius;
   let cols = max(1u, u32(floor(worldW / spacing)));
   let rows = max(1u, u32(floor(worldH / spacing)));
   let sx = idx % cols;
   let sy = idx / cols;
   let samplePos = vec2f((f32(sx) + 0.5) * spacing, (f32(sy) + 0.5) * spacing);
-  let simTime = f32(params.counts.z) * dt;
+  let center = read_pheromone(i32(sx), i32(sy), cols, rows, sampleCount).x;
 
-  let center = read_pheromone(i32(sx), i32(sy), cols, rows, sampleCount);
-  let right = read_pheromone(i32(sx) + 1, i32(sy), cols, rows, sampleCount);
-  let left = read_pheromone(i32(sx) - 1, i32(sy), cols, rows, sampleCount);
-  let down = read_pheromone(i32(sx), i32(sy) + 1, cols, rows, sampleCount);
-  let up = read_pheromone(i32(sx), i32(sy) - 1, cols, rows, sampleCount);
+  let diffuseMix = clamp(params.boidB.z, 0.0, 1.0);
+  let decay = clamp(params.boidB.w, 0.0, 0.95);
+  let depositAmount = max(params.lifeA.x, 0.0);
+  let nodeSourceStrength = max(params.lifeA.y, 0.0);
 
-  let diffusion = clamp(params.heatmapB.z, 0.01, 0.95);
-  let trailDecay = max(params.heatmapB.w, 0.01);
-  let fearDecay = max(params.lifeA.w, 0.01);
-  let diffBlend = clamp(diffusion * dt * 6.0, 0.01, 0.48);
-
-  let trailNeighborMean = (center.x + right.x + left.x + down.x + up.x) * 0.2;
-  let fearNeighborMean = (center.y + right.y + left.y + down.y + up.y) * 0.2;
-  let foodNeighborMean = (center.z + right.z + left.z + down.z + up.z) * 0.2;
-  let hazardNeighborMean = (center.w + right.w + left.w + down.w + up.w) * 0.2;
-  var trail = mix(center.x, trailNeighborMean, diffBlend);
-  var fear = mix(center.y, fearNeighborMean, diffBlend * 1.2);
-  var food = mix(center.z, foodNeighborMean, diffBlend * 0.9);
-  var hazard = mix(center.w, hazardNeighborMean, diffBlend * 1.05);
-
-  let boidSampleCount = min(boidCount, MAX_BOID_SAMPLES);
-  let seed = hash_u32(idx * 1664525u + u32(params.counts.z) * 1013904223u + 23u);
-  var boidIndex = seed % boidCount;
-  var step = 1u;
-  if (boidCount > 1u) {
-    step = 1u + ((seed >> 1u) % (boidCount - 1u));
-  }
-
-  var boidPresence = 0.0;
-  for (var i: u32 = 0u; i < boidSampleCount; i = i + 1u) {
-    let boid = boids[boidIndex];
-    let dx = wrapped_abs_delta(samplePos.x, boid.posVel.x, worldW);
-    let dy = wrapped_abs_delta(samplePos.y, boid.posVel.y, worldH);
-    let distSq = dx * dx + dy * dy;
-    if (distSq < diffuseRadiusSq) {
-      boidPresence = boidPresence + exp(-distSq / max(diffuseRadiusSq * 0.62, 0.0001));
-    }
-    boidIndex = (boidIndex + step) % boidCount;
-  }
-  boidPresence = boidPresence * (f32(boidCount) / f32(boidSampleCount));
-  var trailDeposit = boidPresence * 0.0022;
-  let trailPulse = 0.72 + 0.28 * (0.5 + 0.5 * sin(simTime * 0.27));
-  trailDeposit = trailDeposit * trailPulse;
-
-  var fearDeposit = 0.0;
-  let fearRadiusSq = params.boidA.z * params.boidA.z;
-  for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
-    let predator = predators[p];
-    let dx = wrapped_abs_delta(samplePos.x, predator.posVel.x, worldW);
-    let dy = wrapped_abs_delta(samplePos.y, predator.posVel.y, worldH);
-    let distSq = dx * dx + dy * dy;
-    if (distSq < fearRadiusSq) {
-      fearDeposit = fearDeposit + exp(-distSq / max(fearRadiusSq * 0.28, 0.0001));
+  var neighborSum = 0.0;
+  for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
+    for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
+      neighborSum = neighborSum + read_pheromone(i32(sx) + ox, i32(sy) + oy, cols, rows, sampleCount).x;
     }
   }
-  fearDeposit = fearDeposit * 0.055;
-  let fearPulse = 0.85 + 0.45 * (0.5 + 0.5 * sin(simTime * 0.41 + 0.6));
-  fearDeposit = fearDeposit * fearPulse;
+  let neighborMean = neighborSum * (1.0 / 9.0);
+  var trail = center + (neighborMean - center) * diffuseMix;
 
-  let foodWave = 0.5 + 0.5 *
-    sin(samplePos.x * 0.012 + simTime * 0.37) *
-    cos(samplePos.y * 0.009 - simTime * 0.41);
-  let foodRegen = (0.0009 + 0.0021 * foodWave) * dt * 60.0;
-  let foodConsume = boidPresence * 0.0030 * dt * 60.0;
+  let claim = atomicLoad(&occupancyClaims[idx]);
+  if (claim > 0u) {
+    let claimBoost = min(12.0, log2(1.0 + f32(claim)));
+    trail = trail + depositAmount * claimBoost * 0.09;
+  }
 
-  let stormA = vec2f(
-    (0.5 + 0.34 * sin(simTime * 0.17 + 0.8)) * worldW,
-    (0.5 + 0.29 * cos(simTime * 0.13 - 0.4)) * worldH,
-  );
-  let stormB = vec2f(
-    (0.5 + 0.37 * sin(simTime * 0.23 + 2.4)) * worldW,
-    (0.5 + 0.27 * cos(simTime * 0.19 + 1.3)) * worldH,
-  );
-  let stormRadiusA = params.boidA.z * 0.72;
-  let stormRadiusB = params.boidA.z * 0.58;
-  let dax = wrapped_abs_delta(samplePos.x, stormA.x, worldW);
-  let day = wrapped_abs_delta(samplePos.y, stormA.y, worldH);
-  let dbx = wrapped_abs_delta(samplePos.x, stormB.x, worldW);
-  let dby = wrapped_abs_delta(samplePos.y, stormB.y, worldH);
-  let distASq = dax * dax + day * day;
-  let distBSq = dbx * dbx + dby * dby;
-  let stormDeposit =
-    exp(-distASq / max(stormRadiusA * stormRadiusA * 0.34, 0.0001)) * 0.030 +
-    exp(-distBSq / max(stormRadiusB * stormRadiusB * 0.30, 0.0001)) * 0.026;
+  if (nodeSourceStrength > 0.00001) {
+    let t = f32(params.counts.z) * 0.002;
+    for (var k: u32 = 0u; k < 6u; k = k + 1u) {
+      let fk = f32(k);
+      let orbit = t * (0.52 + fk * 0.06) + fk * (TAU / 6.0);
+      let node = vec2f(
+        worldW * (0.5 + 0.34 * cos(orbit + 0.45 * sin(t * 0.33 + fk))),
+        worldH * (0.5 + 0.28 * sin(orbit * 0.92 + fk * 0.37)),
+      );
+      let dx = wrapped_abs_delta(samplePos.x, node.x, worldW);
+      let dy = wrapped_abs_delta(samplePos.y, node.y, worldH);
+      let distSq = dx * dx + dy * dy;
+      let spread = 1350.0 + 320.0 * fk;
+      trail = trail + exp(-distSq / spread) * nodeSourceStrength * 0.34;
+    }
+  }
 
-  let foodDecay = max(trailDecay * 0.58, 0.01);
-  let hazardDecay = max(fearDecay * 1.55, 0.01);
-
-  trail = max(0.0, trail + trailDeposit - trail * trailDecay * dt);
-  fear = max(0.0, fear + fearDeposit - fear * fearDecay * dt);
-  food = max(0.0, food + foodRegen - foodConsume - food * foodDecay * dt);
-  hazard = max(0.0, hazard + stormDeposit + fearDeposit * 0.22 - hazard * hazardDecay * dt);
-  fear = fear + hazard * 0.018;
-
-  pheromoneNext[idx].values = vec4f(trail, fear, food, hazard);
+  trail = clamp(trail * (1.0 - decay), 0.0, 9.0);
+  pheromoneNext[idx].values = vec4f(trail, 0.0, 0.0, 0.0);
 }
 `;
 
@@ -1039,6 +969,7 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read_write> caughtFlags: array<atomic<u32>>;
@@ -1072,6 +1003,7 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read_write> predators: array<PredatorState>;
@@ -1093,9 +1025,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     var pred = predators[p];
-    pred.headingTimers.z = 0.0;
-    pred.headingTimers.w = 0.0;
+    pred.headingTimers.z = clamp(pred.headingTimers.z + 0.1, 0.0, 1.0);
+    pred.headingTimers.w = max(pred.headingTimers.w, 0.65);
     pred.aux.z = -1.0;
+    pred.aux.x = 0.0;
     pred.headingTimers.y = 0.0;
 
     predators[p] = pred;
@@ -1107,6 +1040,7 @@ const boidRenderShader = `
 struct BoidState {
   posVel: vec4f,
   headingTurn: vec4f,
+  bio: vec4f,
 };
 
 struct SimParams {
@@ -1120,6 +1054,7 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 struct VSOut {
@@ -1154,13 +1089,13 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) inst
   let clipX = world.x / params.world.x * 2.0 - 1.0;
   let clipY = 1.0 - world.y / params.world.y * 2.0;
 
-  let speedRatio = clamp(length(boid.posVel.zw) / max(params.boidB.x, 0.0001), 0.0, 1.0);
-  let colorA = vec3f(0.40, 0.95, 1.00);
-  let colorB = vec3f(0.66, 0.98, 0.90);
+  let speedRatio = clamp(length(boid.posVel.zw) / max(params.boidA.w, 0.0001), 0.0, 1.0);
+  let moved = boid.headingTurn.y > 0.5;
+  let baseColor = select(vec3f(0.26, 0.42, 0.66), vec3f(0.55, 0.98, 0.82), moved);
 
   var out: VSOut;
   out.position = vec4f(clipX, clipY, 0.0, 1.0);
-  out.color = mix(colorA, colorB, speedRatio);
+  out.color = mix(baseColor, vec3f(0.96, 0.98, 1.0), speedRatio * 0.25);
   return out;
 }
 
@@ -1186,6 +1121,7 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 struct VSOut {
@@ -1283,6 +1219,7 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 struct VSOut {
@@ -1335,19 +1272,19 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) inst
   let hazard = max(0.0, sample.w);
 
   let total = trail + fear + food + hazard;
-  let intensity = 1.0 - exp(-total * 0.16);
-  let trailTone = clamp(trail * 0.34, 0.0, 1.0);
+  let intensity = 1.0 - exp(-total * 0.55);
+  let trailTone = clamp(log2(1.0 + trail * 18.0) * 0.24, 0.0, 1.0);
   let fearTone = clamp(fear * 0.44, 0.0, 1.0);
   let foodTone = clamp(food * 0.52, 0.0, 1.0);
   let hazardTone = clamp(hazard * 0.48, 0.0, 1.0);
 
-  let base = vec3f(0.03, 0.07, 0.16);
+  let base = vec3f(0.02, 0.05, 0.14);
   var color = base;
-  color = color + vec3f(0.08, 0.80, 0.90) * trailTone;
+  color = color + vec3f(0.12, 0.90, 0.98) * trailTone;
   color = color + vec3f(1.00, 0.24, 0.32) * fearTone;
   color = color + vec3f(0.96, 0.88, 0.20) * foodTone;
   color = color + vec3f(1.00, 0.56, 0.12) * hazardTone;
-  let blend = 0.12 + 0.88 * smoothstep(0.0, 0.92, intensity);
+  let blend = 0.28 + 0.72 * smoothstep(0.0, 0.9, intensity);
   color = mix(base, min(color, vec3f(1.0, 1.0, 1.0)), blend);
 
   let clipX = world.x / worldW * 2.0 - 1.0;
@@ -1357,7 +1294,7 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) inst
   out.position = vec4f(clipX, clipY, 0.0, 1.0);
   out.local = local;
   out.color = color;
-  out.alpha = 0.08 + 0.92 * smoothstep(0.0, 1.0, intensity);
+  out.alpha = 0.22 + 0.78 * smoothstep(0.0, 1.0, intensity);
   return out;
 }
 
@@ -1377,6 +1314,7 @@ const heatmapSampleComputeShader = `
 struct BoidState {
   posVel: vec4f,
   headingTurn: vec4f,
+  bio: vec4f,
 };
 
 struct HeatSample {
@@ -1394,6 +1332,7 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 @group(0) @binding(0) var<storage, read> boids: array<BoidState>;
@@ -1505,10 +1444,12 @@ struct SimParams {
   heatmapA: vec4f,
   heatmapB: vec4f,
   lifeA: vec4f,
+  lifeB: vec4f,
 };
 
 struct VSOut {
   @builtin(position) position: vec4f,
+  @location(0) color: vec3f,
 };
 
 @group(0) @binding(0) var<storage, read> predators: array<PredatorState>;
@@ -1516,12 +1457,12 @@ struct VSOut {
 
 fn predator_vertex(vertexIndex: u32) -> vec2f {
   if (vertexIndex == 0u) {
-    return vec2f(6.2, 0.0);
+    return vec2f(11.5, 0.0);
   }
   if (vertexIndex == 1u) {
-    return vec2f(-3.6, 2.4);
+    return vec2f(-6.8, 4.4);
   }
-  return vec2f(-3.6, -2.4);
+  return vec2f(-6.8, -4.4);
 }
 
 @vertex
@@ -1537,15 +1478,17 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) inst
 
   let clipX = world.x / params.world.x * 2.0 - 1.0;
   let clipY = 1.0 - world.y / params.world.y * 2.0;
+  let isApex = predator.aux.y > 0.5;
 
   var out: VSOut;
   out.position = vec4f(clipX, clipY, 0.0, 1.0);
+  out.color = select(vec3f(1.0, 0.36, 0.38), vec3f(0.96, 0.72, 0.22), isApex);
   return out;
 }
 
 @fragment
-fn fsMain() -> @location(0) vec4f {
-  return vec4f(1.0, 0.32, 0.38, 1.0);
+fn fsMain(in: VSOut) -> @location(0) vec4f {
+  return vec4f(in.color, 1.0);
 }
 `;
 
@@ -1567,19 +1510,30 @@ function getHeatmapDiffuseRadiusWorld() {
 
 function createInitialBoidData() {
   const data = new Float32Array(BOID_COUNT * BOID_FLOATS);
+  const spacing = getHeatmapDotSpacingWorld();
+  const cols = Math.max(1, Math.floor(worldWidth / spacing));
+  const rows = Math.max(1, Math.floor(worldHeight / spacing));
   for (let i = 0; i < BOID_COUNT; i += 1) {
     const heading = rand(0, Math.PI * 2);
-    const speed = rand(config.minSpeed, config.maxSpeed);
+    const speed = Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25));
     const base = i * BOID_FLOATS;
+    const cellX = Math.floor(rand(0, cols));
+    const cellY = Math.floor(rand(0, rows));
+    const px = (cellX + 0.5) * spacing;
+    const py = (cellY + 0.5) * spacing;
 
-    data[base + 0] = rand(0, worldWidth);
-    data[base + 1] = rand(0, worldHeight);
+    data[base + 0] = px;
+    data[base + 1] = py;
     data[base + 2] = Math.cos(heading) * speed;
     data[base + 3] = Math.sin(heading) * speed;
     data[base + 4] = heading;
     data[base + 5] = 0;
-    data[base + 6] = 0;
-    data[base + 7] = 0;
+    data[base + 6] = 1;
+    data[base + 7] = 1;
+    data[base + 8] = 0;
+    data[base + 9] = 0;
+    data[base + 10] = 0;
+    data[base + 11] = 0;
   }
   return data;
 }
@@ -1591,19 +1545,21 @@ function createInitialPredatorData() {
   for (let i = 0; i < PREDATOR_COUNT; i += 1) {
     const heading = rand(0, Math.PI * 2);
     const base = i * PREDATOR_FLOATS;
+    const predatorType = i === 0 ? 1 : 0; // one apex, rest hunters
+    const speedScale = predatorType === 1 ? 0.9 : 1;
 
     data[base + 0] = rand(0, worldWidth);
     data[base + 1] = rand(0, worldHeight);
-    data[base + 2] = Math.cos(heading) * predatorSpeed;
-    data[base + 3] = Math.sin(heading) * predatorSpeed;
+    data[base + 2] = Math.cos(heading) * predatorSpeed * speedScale;
+    data[base + 3] = Math.sin(heading) * predatorSpeed * speedScale;
 
     data[base + 4] = heading;
     data[base + 5] = 0;
-    data[base + 6] = 0;
-    data[base + 7] = 0;
+    data[base + 6] = 1;
+    data[base + 7] = rand(0, 0.3);
 
     data[base + 8] = 0;
-    data[base + 9] = 0;
+    data[base + 9] = predatorType;
     data[base + 10] = -1;
     data[base + 11] = 0;
   }
@@ -1615,11 +1571,22 @@ function updateTextState(mode = 'running') {
   lastTextState = JSON.stringify({
     mode,
     renderer: 'webgpu',
-    boidNeighborSearch: 'uniform-grid',
-    lifeFeatures: ['pheromone_trail', 'fear_field', 'panic_state', 'resource_field', 'hazard_storms', 'wormholes'],
-    dynamicSystems: ['migratory_anchor_wave', 'flow_currents', 'social_pulse_cycles', 'portal_transit'],
+    boidNeighborSearch: 'grid_local_neighbors',
+    lifeFeatures: [
+      'peer_cohesion',
+      'peer_separation',
+      'turn_rate_limited_steering',
+      'trail_gradient_following',
+      'trail_diffusion_decay',
+    ],
+    dynamicSystems: [
+      'flocking_flow_fields',
+      'toroidal_wrap',
+      'crowding_feedback',
+    ],
     coordinateSystem: 'origin top-left, +x right, +y down',
     viewport: { width: worldWidth, height: worldHeight },
+    particleCount: BOID_COUNT,
     boidCount: BOID_COUNT,
     predatorCount: PREDATOR_COUNT,
     frameIndex,
@@ -1631,18 +1598,33 @@ function updateTextState(mode = 'running') {
     heatmapSampleBudget: config.heatmapSampleBudget,
     heatmapTrendGain: config.heatmapTrendGain,
     heatmapTrendDeadband: config.heatmapTrendDeadband,
-    pherTrailWeight: config.pherTrailWeight,
-    pherFearWeight: config.pherFearWeight,
-    pherDiffusion: config.pherDiffusion,
-    pherDecay: config.pherDecay,
-    panicBoost: config.panicBoost,
+    trailDeposit: config.physDeposit,
+    sensorOffset: config.physSensorOffset,
+    trailDiffuseMix: config.physDiffuseMix,
+    trailDecay: config.physDecay,
+    turnRateLimitDegPerSec: (config.maxTurnRate * 180) / Math.PI,
+    physSensorAngleDeg: (config.physSensorAngle * 180) / Math.PI,
+    physSensorOffset: config.physSensorOffset,
+    physSensorWidth: config.physSensorWidth,
+    physRotateAngleDeg: (config.maxTurnRate * 180) / Math.PI,
+    physStepSize: config.physStepSize,
+    boidCruiseSpeed: Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25)),
+    physDeposit: config.physDeposit,
+    physDiffuseMix: config.physDiffuseMix,
+    physDecay: config.physDecay,
+    physMode: config.physModeRepel > 0.5 ? 'repel' : 'attract',
+    nodeSourceStrength: config.physNodeSourceStrength,
     gridCellSize: GRID_CELL_SIZE,
     gridMaxCells: GRID_MAX_CELLS,
     gridCellCapacity: GRID_CELL_CAPACITY,
     maxTurnAccelerationDegPerSec2: Number(turnAccelRange.value),
     minSpeed: Number(minSpeedRange.value),
-    predatorAttentionSeconds: Number(predatorAttentionRange.value),
-    predatorSpeedFactor: config.predatorSpeedFactor,
+    avgSpeed: ecologyStats.avgSpeed,
+    avgPredatorSpeed: ecologyStats.avgPredatorSpeed,
+    predatorSamples: ecologyStats.predatorSamples,
+    movedFraction: ecologyStats.movedFraction,
+    movesPerSecond: ecologyStats.movesPerSecond,
+    blockedMoveRate: ecologyStats.blockedMoveRate,
   });
 }
 
@@ -1665,23 +1647,151 @@ function createParamsArray(dtSeconds) {
   const frameScale = dtSeconds * 60;
   const predatorMaxTurnRate = config.maxTurnRate * config.predatorTurnRateFactor;
   const predatorMaxTurnAcceleration = config.maxTurnAcceleration * config.predatorTurnAccelerationFactor;
+  const boidCruiseSpeed = Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25));
   return new Float32Array([
     worldWidth, worldHeight, dtSeconds, frameScale,
     BOID_COUNT, PREDATOR_COUNT, frameIndex, heatmapPointCount,
-    config.perceptionRadius, config.separationRadius, config.predatorAvoidRadius, config.predatorCatchRadius,
-    config.maxSpeed, config.minSpeed, config.maxForce, config.maxTurnRate,
-    config.maxTurnAcceleration, config.alignWeight, config.cohesionWeight, config.separationWeight,
-    config.predatorAvoidWeight, config.predatorAttentionSeconds, config.predatorSeparationRadius, config.predatorSeparationWeight,
-    config.predatorPauseSlowdownSeconds, config.predatorSpeedFactor, predatorMaxTurnRate, predatorMaxTurnAcceleration,
+    config.physSensorAngle, config.physSensorOffset, config.physSensorWidth, boidCruiseSpeed,
+    config.maxTurnRate, config.alignWeight, config.physDiffuseMix, config.physDecay,
+    config.maxTurnAcceleration, config.cohesionWeight, config.separationWeight, 0.72,
+    config.predatorAvoidWeight, config.predatorAttentionSeconds, config.perceptionRadius, config.separationRadius,
+    config.predatorSprintBoost, config.predatorSpeedFactor, predatorMaxTurnRate, predatorMaxTurnAcceleration,
     getHeatmapDotSpacingWorld(), getHeatmapDotRadiusWorld(), getHeatmapDiffuseRadiusWorld(), config.heatmapSampleBudget,
     config.heatmapTrendGain, config.heatmapTrendDeadband, config.pherDiffusion, config.pherDecay,
-    config.pherTrailWeight, config.pherFearWeight, config.panicBoost, config.pherDecay * 1.35,
+    config.physDeposit, config.physNodeSourceStrength, config.panicBoost, config.pherDecay * 1.35,
+    config.metabolismIntensity, config.boidSprintBoost, config.confusionStrength, config.mutationRate,
   ]);
 }
 
 function writeParams(dtSeconds) {
   const params = createParamsArray(dtSeconds);
   gpu.device.queue.writeBuffer(gpu.paramsBuffer, 0, params);
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function maybeScheduleEcologyReadback(timestampMs) {
+  if (!gpu || ecologyStats.readbackPending) {
+    return;
+  }
+  if (timestampMs - ecologyStats.lastReadbackAtMs < ECOLOGY_READBACK_INTERVAL_MS) {
+    return;
+  }
+
+  ecologyStats.readbackPending = true;
+  ecologyStats.lastReadbackAtMs = timestampMs;
+  const sampleBoids = Math.min(BOID_STATS_SAMPLE_COUNT, BOID_COUNT);
+  const boidReadbackBytes = sampleBoids * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const predatorReadbackBytes = PREDATOR_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const counterReadbackBytes = SIM_COUNTER_COUNT * Uint32Array.BYTES_PER_ELEMENT;
+  const readbackEncoder = gpu.device.createCommandEncoder();
+  readbackEncoder.copyBufferToBuffer(
+    gpu.boidBuffers[currentBoidBufferIndex],
+    0,
+    gpu.ecologyReadbackBuffer,
+    0,
+    boidReadbackBytes,
+  );
+  readbackEncoder.copyBufferToBuffer(
+    gpu.predatorBuffer,
+    0,
+    gpu.predatorReadbackBuffer,
+    0,
+    predatorReadbackBytes,
+  );
+  readbackEncoder.copyBufferToBuffer(
+    gpu.simCountersBuffer,
+    0,
+    gpu.counterReadbackBuffer,
+    0,
+    counterReadbackBytes,
+  );
+  gpu.device.queue.submit([readbackEncoder.finish()]);
+
+  Promise.all([
+    gpu.ecologyReadbackBuffer.mapAsync(GPUMapMode.READ),
+    gpu.predatorReadbackBuffer.mapAsync(GPUMapMode.READ),
+    gpu.counterReadbackBuffer.mapAsync(GPUMapMode.READ),
+  ])
+    .then(() => {
+      const boidSample = new Float32Array(gpu.ecologyReadbackBuffer.getMappedRange().slice(0));
+      const predatorSample = new Float32Array(gpu.predatorReadbackBuffer.getMappedRange().slice(0));
+      const counters = new Uint32Array(gpu.counterReadbackBuffer.getMappedRange().slice(0));
+      gpu.ecologyReadbackBuffer.unmap();
+      gpu.predatorReadbackBuffer.unmap();
+      gpu.counterReadbackBuffer.unmap();
+
+      const count = Math.max(1, Math.min(sampleBoids, Math.floor(boidSample.length / BOID_FLOATS)));
+      let speedTotal = 0;
+      let movedCount = 0;
+      for (let i = 0; i < count; i += 1) {
+        const base = i * BOID_FLOATS;
+        const vx = boidSample[base + 2] || 0;
+        const vy = boidSample[base + 3] || 0;
+        speedTotal += Math.hypot(vx, vy);
+        if ((boidSample[base + 5] || 0) > 0.5) {
+          movedCount += 1;
+        }
+      }
+
+      const predatorCount = Math.min(PREDATOR_COUNT, Math.floor(predatorSample.length / PREDATOR_FLOATS));
+      let predatorSpeedTotal = 0;
+      const predatorSamples = [];
+      for (let i = 0; i < predatorCount; i += 1) {
+        const base = i * PREDATOR_FLOATS;
+        const px = predatorSample[base + 0] || 0;
+        const py = predatorSample[base + 1] || 0;
+        const vx = predatorSample[base + 2] || 0;
+        const vy = predatorSample[base + 3] || 0;
+        const speed = Math.hypot(vx, vy);
+        predatorSpeedTotal += speed;
+        predatorSamples.push({
+          id: i,
+          x: Number(px.toFixed(2)),
+          y: Number(py.toFixed(2)),
+          speed: Number(speed.toFixed(3)),
+        });
+      }
+
+      const nowMs = performance.now();
+      if (ecologyStats.lastCounterSampleAtMs === 0) {
+        ecologyStats.lastCounterSampleAtMs = nowMs - ECOLOGY_READBACK_INTERVAL_MS;
+      }
+      const elapsedSeconds = Math.max(0.001, (nowMs - ecologyStats.lastCounterSampleAtMs) / 1000);
+      ecologyStats.lastCounterSampleAtMs = nowMs;
+      const movedCounter = counters[0] || 0;
+      const blockedCounter = counters[1] || 0;
+
+      const alpha = 0.22;
+      ecologyStats.avgSpeed = ecologyStats.avgSpeed + (speedTotal / count - ecologyStats.avgSpeed) * alpha;
+      const predatorAvg = predatorCount > 0 ? predatorSpeedTotal / predatorCount : 0;
+      ecologyStats.avgPredatorSpeed =
+        ecologyStats.avgPredatorSpeed + (predatorAvg - ecologyStats.avgPredatorSpeed) * alpha;
+      ecologyStats.predatorSamples = predatorSamples;
+      ecologyStats.movedFraction = ecologyStats.movedFraction + (movedCount / count - ecologyStats.movedFraction) * alpha;
+      ecologyStats.movesPerSecond =
+        ecologyStats.movesPerSecond + (movedCounter / elapsedSeconds - ecologyStats.movesPerSecond) * alpha;
+      ecologyStats.blockedMoveRate =
+        ecologyStats.blockedMoveRate +
+        (blockedCounter / Math.max(1, movedCounter + blockedCounter) - ecologyStats.blockedMoveRate) * alpha;
+
+      gpu.device.queue.writeBuffer(gpu.simCountersBuffer, 0, new Uint32Array(SIM_COUNTER_COUNT));
+      ecologyStats.readbackPending = false;
+    })
+    .catch(() => {
+      if (gpu?.ecologyReadbackBuffer?.mapState === 'mapped') {
+        gpu.ecologyReadbackBuffer.unmap();
+      }
+      if (gpu?.predatorReadbackBuffer?.mapState === 'mapped') {
+        gpu.predatorReadbackBuffer.unmap();
+      }
+      if (gpu?.counterReadbackBuffer?.mapState === 'mapped') {
+        gpu.counterReadbackBuffer.unmap();
+      }
+      ecologyStats.readbackPending = false;
+    });
 }
 
 function reseedSimulation() {
@@ -1692,7 +1802,9 @@ function reseedSimulation() {
   const boidData = createInitialBoidData();
   const predatorData = createInitialPredatorData();
   const zeroFlags = new Uint32Array(PREDATOR_COUNT);
+  const zeroCounters = new Uint32Array(SIM_COUNTER_COUNT);
   const zeroGridCounts = new Uint32Array(GRID_MAX_CELLS);
+  const zeroOccupancy = new Uint32Array(HEATMAP_MAX_POINTS);
   const zeroHeat = new Float32Array(HEATMAP_MAX_POINTS * 4);
   const zeroPheromone = new Float32Array(HEATMAP_MAX_POINTS * PHEROMONE_FLOATS);
 
@@ -1700,7 +1812,9 @@ function reseedSimulation() {
   gpu.device.queue.writeBuffer(gpu.boidBuffers[1], 0, boidData);
   gpu.device.queue.writeBuffer(gpu.predatorBuffer, 0, predatorData);
   gpu.device.queue.writeBuffer(gpu.caughtFlagsBuffer, 0, zeroFlags);
+  gpu.device.queue.writeBuffer(gpu.simCountersBuffer, 0, zeroCounters);
   gpu.device.queue.writeBuffer(gpu.gridCellCountBuffer, 0, zeroGridCounts);
+  gpu.device.queue.writeBuffer(gpu.occupancyBuffer, 0, zeroOccupancy);
   gpu.device.queue.writeBuffer(gpu.heatmapBuffers[0], 0, zeroHeat);
   gpu.device.queue.writeBuffer(gpu.heatmapBuffers[1], 0, zeroHeat);
   gpu.device.queue.writeBuffer(gpu.pheromoneBuffers[0], 0, zeroPheromone);
@@ -1711,6 +1825,12 @@ function reseedSimulation() {
   currentBoidBufferIndex = 0;
   currentHeatmapBufferIndex = 0;
   currentPheromoneBufferIndex = 0;
+  ecologyStats.avgSpeed = Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25));
+  ecologyStats.movedFraction = 0;
+  ecologyStats.movesPerSecond = 0;
+  ecologyStats.blockedMoveRate = 0;
+  ecologyStats.lastCounterSampleAtMs = performance.now();
+  ecologyStats.readbackPending = false;
   writeParams(FIXED_STEP);
   updateTextState();
 }
@@ -1723,9 +1843,8 @@ function stepSimulation(dtSeconds) {
   let heatmapCpuMs = 0;
 
   const boidUpdateBindGroup = gpu.boidUpdateBindGroups[currentBoidBufferIndex][currentPheromoneBufferIndex];
-  const predatorUpdateBindGroup = gpu.predatorUpdateBindGroups[currentBoidBufferIndex];
   const gridBuildBindGroup = gpu.gridBuildBindGroups[currentBoidBufferIndex];
-  if (!boidUpdateBindGroup || !predatorUpdateBindGroup || !gridBuildBindGroup) {
+  if (!boidUpdateBindGroup || !gpu.occupancyClearBindGroup || !gpu.gridClearBindGroup || !gridBuildBindGroup) {
     throw new Error(`Missing compute bind group for boid buffer index ${currentBoidBufferIndex}.`);
   }
 
@@ -1735,9 +1854,9 @@ function stepSimulation(dtSeconds) {
   const simPass = encoder.beginComputePass();
 
   try {
-    simPass.setPipeline(gpu.clearCaughtPipeline);
-    simPass.setBindGroup(0, gpu.clearCaughtBindGroup);
-    simPass.dispatchWorkgroups(Math.ceil(PREDATOR_COUNT / CATCH_CLEAR_WORKGROUP_SIZE));
+    simPass.setPipeline(gpu.occupancyClearPipeline);
+    simPass.setBindGroup(0, gpu.occupancyClearBindGroup);
+    simPass.dispatchWorkgroups(Math.ceil(heatmapPointCount / HEATMAP_WORKGROUP_SIZE));
 
     simPass.setPipeline(gpu.gridClearPipeline);
     simPass.setBindGroup(0, gpu.gridClearBindGroup);
@@ -1747,23 +1866,28 @@ function stepSimulation(dtSeconds) {
     simPass.setBindGroup(0, gridBuildBindGroup);
     simPass.dispatchWorkgroups(Math.ceil(BOID_COUNT / BOID_WORKGROUP_SIZE));
 
-    simPass.setPipeline(gpu.predatorUpdatePipeline);
-    simPass.setBindGroup(0, predatorUpdateBindGroup);
-    simPass.dispatchWorkgroups(1);
-
     simPass.setPipeline(gpu.boidUpdatePipeline);
     simPass.setBindGroup(0, boidUpdateBindGroup);
     simPass.dispatchWorkgroups(Math.ceil(BOID_COUNT / BOID_WORKGROUP_SIZE));
-
-    simPass.setPipeline(gpu.predatorResolvePipeline);
-    simPass.setBindGroup(0, gpu.predatorResolveBindGroup);
-    simPass.dispatchWorkgroups(1);
   } finally {
     simPass.end();
   }
 
   currentBoidBufferIndex = 1 - currentBoidBufferIndex;
   frameIndex += 1;
+
+  const predatorUpdateBindGroup = gpu.predatorUpdateBindGroups[currentBoidBufferIndex];
+  if (!predatorUpdateBindGroup) {
+    throw new Error('Missing predator update bind group.');
+  }
+  const predatorPass = encoder.beginComputePass();
+  try {
+    predatorPass.setPipeline(gpu.predatorUpdatePipeline);
+    predatorPass.setBindGroup(0, predatorUpdateBindGroup);
+    predatorPass.dispatchWorkgroups(1);
+  } finally {
+    predatorPass.end();
+  }
 
   const pheromoneUpdateBindGroup = gpu.pheromoneUpdateBindGroups[currentBoidBufferIndex][currentPheromoneBufferIndex];
   if (!pheromoneUpdateBindGroup) {
@@ -1814,7 +1938,8 @@ function renderFrame() {
   const boidRenderBindGroup = gpu.boidRenderBindGroups[currentBoidBufferIndex];
   const heatmapRenderBindGroup = gpu.boidHeatmapRenderBindGroups[currentHeatmapBufferIndex];
   const pheromoneRenderBindGroup = gpu.pheromoneRenderBindGroups[currentPheromoneBufferIndex];
-  if (!boidRenderBindGroup || !heatmapRenderBindGroup || !pheromoneRenderBindGroup) {
+  const predatorRenderBindGroup = gpu.predatorRenderBindGroup;
+  if (!boidRenderBindGroup || !heatmapRenderBindGroup || !pheromoneRenderBindGroup || !predatorRenderBindGroup) {
     throw new Error(`Missing render bind group for boid buffer index ${currentBoidBufferIndex}.`);
   }
 
@@ -1845,10 +1970,11 @@ function renderFrame() {
       renderPass.setPipeline(gpu.boidRenderPipeline);
       renderPass.setBindGroup(0, boidRenderBindGroup);
       renderPass.draw(3, BOID_COUNT, 0, 0);
-      renderPass.setPipeline(gpu.predatorRenderPipeline);
-      renderPass.setBindGroup(0, gpu.predatorRenderBindGroup);
-      renderPass.draw(3, PREDATOR_COUNT, 0, 0);
     }
+
+    renderPass.setPipeline(gpu.predatorRenderPipeline);
+    renderPass.setBindGroup(0, predatorRenderBindGroup);
+    renderPass.draw(3, PREDATOR_COUNT, 0, 0);
   } finally {
     renderPass.end();
   }
@@ -1905,6 +2031,7 @@ function tick(timestamp) {
       heatmapCpuMs += timings.heatmapCpuMs;
       accumulator -= FIXED_STEP;
     }
+    maybeScheduleEcologyReadback(timestamp);
 
     const renderStart = performance.now();
     renderFrame();
@@ -1937,6 +2064,7 @@ function advanceTime(ms) {
     stepSimulation(remainder);
   }
 
+  maybeScheduleEcologyReadback(performance.now());
   renderFrame();
   updateTextState();
 }
@@ -1989,25 +2117,28 @@ async function initWebGPU() {
   const predatorBufferBytes = PREDATOR_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const heatmapBufferBytes = HEATMAP_MAX_POINTS * 4 * Float32Array.BYTES_PER_ELEMENT;
   const pheromoneBufferBytes = HEATMAP_MAX_POINTS * PHEROMONE_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const occupancyBufferBytes = HEATMAP_MAX_POINTS * Uint32Array.BYTES_PER_ELEMENT;
   const gridCellCountBytes = GRID_MAX_CELLS * Uint32Array.BYTES_PER_ELEMENT;
   const gridBoidIndexBytes = GRID_MAX_CELLS * GRID_CELL_CAPACITY * Uint32Array.BYTES_PER_ELEMENT;
-  const paramsBufferBytes = 40 * Float32Array.BYTES_PER_ELEMENT;
+  const paramsBufferBytes = 44 * Float32Array.BYTES_PER_ELEMENT;
   const caughtFlagsBytes = PREDATOR_COUNT * Uint32Array.BYTES_PER_ELEMENT;
+  const simCountersBytes = SIM_COUNTER_COUNT * Uint32Array.BYTES_PER_ELEMENT;
+  const boidReadbackBytes = Math.min(BOID_STATS_SAMPLE_COUNT, BOID_COUNT) * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
 
   const boidBuffers = [
     device.createBuffer({
       size: boidBufferBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     }),
     device.createBuffer({
       size: boidBufferBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     }),
   ];
 
   const predatorBuffer = device.createBuffer({
     size: predatorBufferBytes,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
 
   const heatmapBuffers = [
@@ -2037,6 +2168,11 @@ async function initWebGPU() {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
+  const occupancyBuffer = device.createBuffer({
+    size: occupancyBufferBytes,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
   const gridBoidIndexBuffer = device.createBuffer({
     size: gridBoidIndexBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -2047,9 +2183,29 @@ async function initWebGPU() {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
+  const simCountersBuffer = device.createBuffer({
+    size: simCountersBytes,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+  });
+
   const paramsBuffer = device.createBuffer({
     size: paramsBufferBytes,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  const ecologyReadbackBuffer = device.createBuffer({
+    size: boidReadbackBytes,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+
+  const predatorReadbackBuffer = device.createBuffer({
+    size: predatorBufferBytes,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+
+  const counterReadbackBuffer = device.createBuffer({
+    size: simCountersBytes,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
 
   async function createCheckedShaderModule(label, code) {
@@ -2068,6 +2224,7 @@ async function initWebGPU() {
   const boidUpdateModule = await createCheckedShaderModule('boidUpdateShader', boidUpdateShader);
   const predatorUpdateModule = await createCheckedShaderModule('predatorUpdateShader', predatorUpdateShader);
   const gridClearModule = await createCheckedShaderModule('gridClearShader', gridClearShader);
+  const occupancyClearModule = await createCheckedShaderModule('occupancyClearShader', occupancyClearShader);
   const gridBuildModule = await createCheckedShaderModule('gridBuildShader', gridBuildShader);
   const pheromoneUpdateModule = await createCheckedShaderModule('pheromoneUpdateShader', pheromoneUpdateShader);
   const clearCaughtModule = await createCheckedShaderModule('catchClearShader', catchClearShader);
@@ -2098,6 +2255,14 @@ async function initWebGPU() {
     layout: 'auto',
     compute: {
       module: gridClearModule,
+      entryPoint: 'main',
+    },
+  });
+
+  const occupancyClearPipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: occupancyClearModule,
       entryPoint: 'main',
     },
   });
@@ -2249,12 +2414,12 @@ async function initWebGPU() {
         entries: [
           { binding: 0, resource: { buffer: boidBuffers[0] } },
           { binding: 1, resource: { buffer: boidBuffers[1] } },
-          { binding: 2, resource: { buffer: predatorBuffer } },
           { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
-          { binding: 4, resource: { buffer: gridCellCountBuffer } },
-          { binding: 5, resource: { buffer: gridBoidIndexBuffer } },
-          { binding: 6, resource: { buffer: caughtFlagsBuffer } },
+          { binding: 4, resource: { buffer: occupancyBuffer } },
+          { binding: 5, resource: { buffer: gridCellCountBuffer } },
+          { binding: 6, resource: { buffer: gridBoidIndexBuffer } },
           { binding: 7, resource: { buffer: paramsBuffer } },
+          { binding: 8, resource: { buffer: simCountersBuffer } },
         ],
       }),
       device.createBindGroup({
@@ -2262,12 +2427,12 @@ async function initWebGPU() {
         entries: [
           { binding: 0, resource: { buffer: boidBuffers[0] } },
           { binding: 1, resource: { buffer: boidBuffers[1] } },
-          { binding: 2, resource: { buffer: predatorBuffer } },
           { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
-          { binding: 4, resource: { buffer: gridCellCountBuffer } },
-          { binding: 5, resource: { buffer: gridBoidIndexBuffer } },
-          { binding: 6, resource: { buffer: caughtFlagsBuffer } },
+          { binding: 4, resource: { buffer: occupancyBuffer } },
+          { binding: 5, resource: { buffer: gridCellCountBuffer } },
+          { binding: 6, resource: { buffer: gridBoidIndexBuffer } },
           { binding: 7, resource: { buffer: paramsBuffer } },
+          { binding: 8, resource: { buffer: simCountersBuffer } },
         ],
       }),
     ],
@@ -2277,12 +2442,12 @@ async function initWebGPU() {
         entries: [
           { binding: 0, resource: { buffer: boidBuffers[1] } },
           { binding: 1, resource: { buffer: boidBuffers[0] } },
-          { binding: 2, resource: { buffer: predatorBuffer } },
           { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
-          { binding: 4, resource: { buffer: gridCellCountBuffer } },
-          { binding: 5, resource: { buffer: gridBoidIndexBuffer } },
-          { binding: 6, resource: { buffer: caughtFlagsBuffer } },
+          { binding: 4, resource: { buffer: occupancyBuffer } },
+          { binding: 5, resource: { buffer: gridCellCountBuffer } },
+          { binding: 6, resource: { buffer: gridBoidIndexBuffer } },
           { binding: 7, resource: { buffer: paramsBuffer } },
+          { binding: 8, resource: { buffer: simCountersBuffer } },
         ],
       }),
       device.createBindGroup({
@@ -2290,12 +2455,12 @@ async function initWebGPU() {
         entries: [
           { binding: 0, resource: { buffer: boidBuffers[1] } },
           { binding: 1, resource: { buffer: boidBuffers[0] } },
-          { binding: 2, resource: { buffer: predatorBuffer } },
           { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
-          { binding: 4, resource: { buffer: gridCellCountBuffer } },
-          { binding: 5, resource: { buffer: gridBoidIndexBuffer } },
-          { binding: 6, resource: { buffer: caughtFlagsBuffer } },
+          { binding: 4, resource: { buffer: occupancyBuffer } },
+          { binding: 5, resource: { buffer: gridCellCountBuffer } },
+          { binding: 6, resource: { buffer: gridBoidIndexBuffer } },
           { binding: 7, resource: { buffer: paramsBuffer } },
+          { binding: 8, resource: { buffer: simCountersBuffer } },
         ],
       }),
     ],
@@ -2325,6 +2490,14 @@ async function initWebGPU() {
     entries: [{ binding: 0, resource: { buffer: gridCellCountBuffer } }],
   });
 
+  const occupancyClearBindGroup = device.createBindGroup({
+    layout: occupancyClearPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: occupancyBuffer } },
+      { binding: 1, resource: { buffer: paramsBuffer } },
+    ],
+  });
+
   const gridBuildBindGroups = [
     device.createBindGroup({
       layout: gridBuildPipeline.getBindGroupLayout(0),
@@ -2351,21 +2524,19 @@ async function initWebGPU() {
       device.createBindGroup({
         layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: boidBuffers[0] } },
-          { binding: 1, resource: { buffer: predatorBuffer } },
           { binding: 2, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 4, resource: { buffer: paramsBuffer } },
+          { binding: 5, resource: { buffer: occupancyBuffer } },
         ],
       }),
       device.createBindGroup({
         layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: boidBuffers[0] } },
-          { binding: 1, resource: { buffer: predatorBuffer } },
           { binding: 2, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 4, resource: { buffer: paramsBuffer } },
+          { binding: 5, resource: { buffer: occupancyBuffer } },
         ],
       }),
     ],
@@ -2373,21 +2544,19 @@ async function initWebGPU() {
       device.createBindGroup({
         layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: boidBuffers[1] } },
-          { binding: 1, resource: { buffer: predatorBuffer } },
           { binding: 2, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 4, resource: { buffer: paramsBuffer } },
+          { binding: 5, resource: { buffer: occupancyBuffer } },
         ],
       }),
       device.createBindGroup({
         layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: boidBuffers[1] } },
-          { binding: 1, resource: { buffer: predatorBuffer } },
           { binding: 2, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 4, resource: { buffer: paramsBuffer } },
+          { binding: 5, resource: { buffer: occupancyBuffer } },
         ],
       }),
     ],
@@ -2520,13 +2689,19 @@ async function initWebGPU() {
     predatorBuffer,
     heatmapBuffers,
     pheromoneBuffers,
+    occupancyBuffer,
     gridCellCountBuffer,
     gridBoidIndexBuffer,
     caughtFlagsBuffer,
+    simCountersBuffer,
     paramsBuffer,
+    ecologyReadbackBuffer,
+    predatorReadbackBuffer,
+    counterReadbackBuffer,
     boidUpdatePipeline,
     predatorUpdatePipeline,
     gridClearPipeline,
+    occupancyClearPipeline,
     gridBuildPipeline,
     pheromoneUpdatePipeline,
     clearCaughtPipeline,
@@ -2539,6 +2714,7 @@ async function initWebGPU() {
     boidUpdateBindGroups,
     predatorUpdateBindGroups,
     gridClearBindGroup,
+    occupancyClearBindGroup,
     gridBuildBindGroups,
     pheromoneUpdateBindGroups,
     heatmapComputeBindGroups,
@@ -2576,11 +2752,19 @@ function updateHeatmapControlLabels() {
 }
 
 function updateLifeFieldControlLabels() {
-  pherTrailWeightValue.textContent = config.pherTrailWeight.toFixed(2);
-  pherFearWeightValue.textContent = config.pherFearWeight.toFixed(2);
-  pherDiffusionValue.textContent = config.pherDiffusion.toFixed(2);
-  pherDecayValue.textContent = config.pherDecay.toFixed(2);
-  panicBoostValue.textContent = config.panicBoost.toFixed(2);
+  pherTrailWeightValue.textContent = config.physDeposit.toFixed(2);
+  pherFearWeightValue.textContent = config.physSensorOffset.toFixed(1);
+  pherDiffusionValue.textContent = config.physDiffuseMix.toFixed(2);
+  pherDecayValue.textContent = config.physDecay.toFixed(3);
+  panicBoostValue.textContent = ((config.maxTurnRate * 180) / Math.PI).toFixed(0);
+}
+
+function updateEcologyControlLabels() {
+  metabolismValue.textContent = config.metabolismIntensity.toFixed(2);
+  boidSprintBoostValue.textContent = config.boidSprintBoost.toFixed(2);
+  predatorSprintBoostValue.textContent = config.predatorSprintBoost.toFixed(2);
+  confusionStrengthValue.textContent = config.confusionStrength.toFixed(2);
+  mutationRateValue.textContent = config.mutationRate.toFixed(3);
 }
 
 turnAccelRange.addEventListener('input', () => {
@@ -2594,8 +2778,8 @@ minSpeedRange.addEventListener('input', () => {
 });
 
 predatorAttentionRange.addEventListener('input', () => {
-  predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(1);
-  config.predatorAttentionSeconds = Number(predatorAttentionRange.value);
+  predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(2);
+  config.physNodeSourceStrength = Number(predatorAttentionRange.value);
 });
 
 heatmapSpacingRange.addEventListener('input', () => {
@@ -2630,28 +2814,53 @@ heatmapTrendDeadbandRange.addEventListener('input', () => {
 });
 
 pherTrailWeightRange.addEventListener('input', () => {
-  config.pherTrailWeight = Number(pherTrailWeightRange.value);
+  config.physDeposit = Number(pherTrailWeightRange.value);
   updateLifeFieldControlLabels();
 });
 
 pherFearWeightRange.addEventListener('input', () => {
-  config.pherFearWeight = Number(pherFearWeightRange.value);
+  config.physSensorOffset = Number(pherFearWeightRange.value);
   updateLifeFieldControlLabels();
 });
 
 pherDiffusionRange.addEventListener('input', () => {
-  config.pherDiffusion = Number(pherDiffusionRange.value);
+  config.physDiffuseMix = Number(pherDiffusionRange.value);
   updateLifeFieldControlLabels();
 });
 
 pherDecayRange.addEventListener('input', () => {
-  config.pherDecay = Number(pherDecayRange.value);
+  config.physDecay = Number(pherDecayRange.value);
   updateLifeFieldControlLabels();
 });
 
 panicBoostRange.addEventListener('input', () => {
-  config.panicBoost = Number(panicBoostRange.value);
+  config.maxTurnRate = (Number(panicBoostRange.value) * Math.PI) / 180;
   updateLifeFieldControlLabels();
+});
+
+metabolismRange.addEventListener('input', () => {
+  config.metabolismIntensity = Number(metabolismRange.value);
+  updateEcologyControlLabels();
+});
+
+boidSprintBoostRange.addEventListener('input', () => {
+  config.boidSprintBoost = Number(boidSprintBoostRange.value);
+  updateEcologyControlLabels();
+});
+
+predatorSprintBoostRange.addEventListener('input', () => {
+  config.predatorSprintBoost = Number(predatorSprintBoostRange.value);
+  updateEcologyControlLabels();
+});
+
+confusionStrengthRange.addEventListener('input', () => {
+  config.confusionStrength = Number(confusionStrengthRange.value);
+  updateEcologyControlLabels();
+});
+
+mutationRateRange.addEventListener('input', () => {
+  config.mutationRate = Number(mutationRateRange.value);
+  updateEcologyControlLabels();
 });
 
 viewToggleButton.addEventListener('click', () => {
@@ -2676,9 +2885,10 @@ window.advanceTime = advanceTime;
 
 turnAccelValue.textContent = turnAccelRange.value;
 minSpeedValue.textContent = Number(minSpeedRange.value).toFixed(2);
-predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(1);
+predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(2);
 updateHeatmapControlLabels();
 updateLifeFieldControlLabels();
+updateEcologyControlLabels();
 updateViewToggleLabel();
 updatePerformancePanel();
 

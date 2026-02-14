@@ -1,0 +1,15 @@
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
+# Generated test artifacts and captures
+output/
+playwright-report/
+test-results/
+
+# Local logs/temp files
+*.log
+*.tmp
+
+# Local working notes (not source)
+progress.md

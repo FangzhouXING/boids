@@ -10,7 +10,7 @@
     <main>
       <header>
         <h1>Boids Simulation</h1>
-        <p>30000 boids, fixed count.</p>
+        <p>10000 boids, fixed count.</p>
       </header>
 
       <section class="sim-layout">
@@ -21,24 +21,24 @@
         <aside class="controls" aria-label="Simulation controls">
           <section class="control-section" aria-label="Boid motion controls">
             <h2 class="control-title">Boids</h2>
-            <p class="fixed-count">Count: <strong>30000</strong> (fixed)</p>
+            <p class="fixed-count">Count: <strong>10000</strong> (fixed)</p>
             <label class="control-group" for="turnAccelRange">
-              <span>Turn Accel: <strong id="turnAccelValue">720</strong> deg/s²</span>
-              <input id="turnAccelRange" type="range" min="120" max="2400" step="20" value="720" />
+              <span>Turn Accel: <strong id="turnAccelValue">340</strong> deg/s²</span>
+              <input id="turnAccelRange" type="range" min="120" max="2400" step="20" value="340" />
             </label>
             <label class="control-group" for="minSpeedRange">
-              <span>Min Speed: <strong id="minSpeedValue">0.45</strong></span>
-              <input id="minSpeedRange" type="range" min="0" max="1.6" step="0.05" value="0.45" />
+              <span>Min Speed: <strong id="minSpeedValue">0.55</strong></span>
+              <input id="minSpeedRange" type="range" min="0" max="1.6" step="0.05" value="0.55" />
             </label>
             <button id="viewToggleButton" class="secondary" type="button" aria-pressed="false">View: Arrows</button>
           </section>
 
-          <section class="control-section" aria-label="Predator controls">
-            <h2 class="control-title">Predators</h2>
-            <p class="fixed-count">Count: <strong>5</strong> (fixed)</p>
+          <section class="control-section" aria-label="Trail source controls">
+            <h2 class="control-title">Trail Sources</h2>
+            <p class="fixed-count">Nodes: <strong>6</strong> (drifting)</p>
             <label class="control-group" for="predatorAttentionRange">
-              <span>Attention: <strong id="predatorAttentionValue">3.0</strong> s</span>
-              <input id="predatorAttentionRange" type="range" min="0.5" max="8" step="0.1" value="3.0" />
+              <span>Source Strength: <strong id="predatorAttentionValue">0.08</strong></span>
+              <input id="predatorAttentionRange" type="range" min="0.00" max="2.00" step="0.02" value="0.08" />
             </label>
           </section>
 
@@ -70,27 +70,51 @@
             </label>
           </section>
 
-          <section class="control-section" aria-label="Life field controls">
-            <h2 class="control-title">Life Field</h2>
+          <section class="control-section" aria-label="Physarum controls">
+            <h2 class="control-title">Physarum</h2>
             <label class="control-group" for="pherTrailWeightRange">
-              <span>Trail Follow: <strong id="pherTrailWeightValue">0.60</strong></span>
-              <input id="pherTrailWeightRange" type="range" min="0" max="2.0" step="0.05" value="0.60" />
+              <span>Trail Deposit: <strong id="pherTrailWeightValue">0.65</strong></span>
+              <input id="pherTrailWeightRange" type="range" min="0.10" max="4.00" step="0.05" value="0.65" />
             </label>
             <label class="control-group" for="pherFearWeightRange">
-              <span>Fear Avoid: <strong id="pherFearWeightValue">1.50</strong></span>
-              <input id="pherFearWeightRange" type="range" min="0" max="3.5" step="0.05" value="1.50" />
+              <span>Sensor Offset: <strong id="pherFearWeightValue">10.5</strong></span>
+              <input id="pherFearWeightRange" type="range" min="2.0" max="24.0" step="0.5" value="10.5" />
             </label>
             <label class="control-group" for="pherDiffusionRange">
-              <span>Field Diffusion: <strong id="pherDiffusionValue">0.28</strong></span>
-              <input id="pherDiffusionRange" type="range" min="0.02" max="0.8" step="0.01" value="0.28" />
+              <span>Trail Diffusion: <strong id="pherDiffusionValue">0.36</strong></span>
+              <input id="pherDiffusionRange" type="range" min="0.02" max="0.95" step="0.01" value="0.36" />
             </label>
             <label class="control-group" for="pherDecayRange">
-              <span>Field Decay: <strong id="pherDecayValue">0.30</strong></span>
-              <input id="pherDecayRange" type="range" min="0.02" max="1.2" step="0.01" value="0.30" />
+              <span>Trail Decay: <strong id="pherDecayValue">0.050</strong></span>
+              <input id="pherDecayRange" type="range" min="0.001" max="0.200" step="0.001" value="0.050" />
             </label>
             <label class="control-group" for="panicBoostRange">
-              <span>Panic Boost: <strong id="panicBoostValue">1.20</strong></span>
-              <input id="panicBoostRange" type="range" min="0.2" max="2.6" step="0.05" value="1.20" />
+              <span>Turn Rate Limit: <strong id="panicBoostValue">170</strong> deg/s</span>
+              <input id="panicBoostRange" type="range" min="40" max="600" step="5" value="170" />
+            </label>
+          </section>
+
+          <section class="control-section" aria-label="Ecology controls">
+            <h2 class="control-title">Ecology</h2>
+            <label class="control-group" for="metabolismRange">
+              <span>Metabolism: <strong id="metabolismValue">1.00</strong></span>
+              <input id="metabolismRange" type="range" min="0.4" max="2.2" step="0.05" value="1.00" />
+            </label>
+            <label class="control-group" for="boidSprintBoostRange">
+              <span>Boid Sprint: <strong id="boidSprintBoostValue">0.90</strong></span>
+              <input id="boidSprintBoostRange" type="range" min="0.1" max="2.2" step="0.05" value="0.90" />
+            </label>
+            <label class="control-group" for="predatorSprintBoostRange">
+              <span>Predator Sprint: <strong id="predatorSprintBoostValue">1.05</strong></span>
+              <input id="predatorSprintBoostRange" type="range" min="0.1" max="2.6" step="0.05" value="1.05" />
+            </label>
+            <label class="control-group" for="confusionStrengthRange">
+              <span>Confusion Effect: <strong id="confusionStrengthValue">0.62</strong></span>
+              <input id="confusionStrengthRange" type="range" min="0" max="1.5" step="0.02" value="0.62" />
+            </label>
+            <label class="control-group" for="mutationRateRange">
+              <span>Mutation Rate: <strong id="mutationRateValue">0.07</strong></span>
+              <input id="mutationRateRange" type="range" min="0.01" max="0.22" step="0.005" value="0.07" />
             </label>
           </section>
 
