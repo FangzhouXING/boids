@@ -46,7 +46,7 @@ const heatmapCpuValue = document.getElementById('heatmapCpuValue');
 const renderCpuValue = document.getElementById('renderCpuValue');
 
 const FIXED_STEP = 1 / 60;
-const BOID_COUNT = 15000;
+const BOID_COUNT = 30000;
 const PREDATOR_COUNT = 1;
 const BOID_WORKGROUP_SIZE = 128;
 const CATCH_CLEAR_WORKGROUP_SIZE = 32;
@@ -219,43 +219,18 @@ const MAX_CELL_SCAN: u32 = 24u;
 const COUNTER_MOVED: u32 = 0u;
 const COUNTER_BLOCKED: u32 = 1u;
 
-fn wrap_coordinate(value: f32, size: f32) -> f32 {
-  var result = value;
-  if (result < 0.0) {
-    result = result + size;
-  }
-  if (result >= size) {
-    result = result - size;
-  }
-  return result;
-}
-
-fn wrapped_delta(srcValue: f32, dstValue: f32, size: f32) -> f32 {
-  var delta = dstValue - srcValue;
-  let half = size * 0.5;
-  if (delta > half) {
-    delta = delta - size;
-  } else if (delta < -half) {
-    delta = delta + size;
-  }
-  return delta;
-}
-
-fn wrap_index(value: i32, size: i32) -> u32 {
-  var v = value % size;
-  if (v < 0) {
-    v = v + size;
-  }
-  return u32(v);
+fn clamp_coordinate(value: f32, size: f32) -> f32 {
+  return clamp(value, 0.0, max(size - 0.001, 0.0));
 }
 
 fn read_pheromone_sample(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec4f {
   if (cols == 0u || rows == 0u || sampleCount == 0u) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
-  let sx = wrap_index(x, i32(cols));
-  let sy = wrap_index(y, i32(rows));
-  let idx = sy * cols + sx;
+  if (x < 0 || y < 0 || x >= i32(cols) || y >= i32(rows)) {
+    return vec4f(0.0, 0.0, 0.0, 0.0);
+  }
+  let idx = u32(y) * cols + u32(x);
   if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
@@ -394,8 +369,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var predatorAvoidCount = 0u;
   for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
     let pred = predators[p];
-    let dx = wrapped_delta(mePos.x, pred.posVel.x, worldW);
-    let dy = wrapped_delta(mePos.y, pred.posVel.y, worldH);
+    let dx = pred.posVel.x - mePos.x;
+    let dy = pred.posVel.y - mePos.y;
     let delta = vec2f(dx, dy);
     let distSq = dot(delta, delta);
     if (distSq <= 0.0001 || distSq > predatorAvoidRadiusSq) {
@@ -419,9 +394,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var separationSum = vec2f(0.0, 0.0);
   var alignmentSum = vec2f(0.0, 0.0);
   for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
-    let ny = wrap_index(i32(cy) + oy, i32(gridRows));
+    let nyi = i32(cy) + oy;
+    if (nyi < 0 || nyi >= i32(gridRows)) {
+      continue;
+    }
+    let ny = u32(nyi);
     for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
-      let nx = wrap_index(i32(cx) + ox, i32(gridCols));
+      let nxi = i32(cx) + ox;
+      if (nxi < 0 || nxi >= i32(gridCols)) {
+        continue;
+      }
+      let nx = u32(nxi);
       let rawCellIndex = ny * gridCols + nx;
       if (rawCellIndex >= gridCount) {
         continue;
@@ -434,8 +417,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           continue;
         }
         let other = boidsIn[neighborIndex];
-        let dx = wrapped_delta(mePos.x, other.posVel.x, worldW);
-        let dy = wrapped_delta(mePos.y, other.posVel.y, worldH);
+        let dx = other.posVel.x - mePos.x;
+        let dy = other.posVel.y - mePos.y;
         let delta = vec2f(dx, dy);
         let distSq = dot(delta, delta);
         if (distSq <= 0.0001 || distSq > perceptionRadiusSq) {
@@ -471,16 +454,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let dirL = vec2f(cos(heading + sensorAngle), sin(heading + sensorAngle));
   let dirR = vec2f(cos(heading - sensorAngle), sin(heading - sensorAngle));
   let sensorPosF = vec2f(
-    wrap_coordinate(mePos.x + dirF.x * sensorOffset, worldW),
-    wrap_coordinate(mePos.y + dirF.y * sensorOffset, worldH),
+    clamp_coordinate(mePos.x + dirF.x * sensorOffset, worldW),
+    clamp_coordinate(mePos.y + dirF.y * sensorOffset, worldH),
   );
   let sensorPosL = vec2f(
-    wrap_coordinate(mePos.x + dirL.x * sensorOffset, worldW),
-    wrap_coordinate(mePos.y + dirL.y * sensorOffset, worldH),
+    clamp_coordinate(mePos.x + dirL.x * sensorOffset, worldW),
+    clamp_coordinate(mePos.y + dirL.y * sensorOffset, worldH),
   );
   let sensorPosR = vec2f(
-    wrap_coordinate(mePos.x + dirR.x * sensorOffset, worldW),
-    wrap_coordinate(mePos.y + dirR.y * sensorOffset, worldH),
+    clamp_coordinate(mePos.x + dirR.x * sensorOffset, worldW),
+    clamp_coordinate(mePos.y + dirR.y * sensorOffset, worldH),
   );
   let F = sensor_mean_component(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u);
   let FL = sensor_mean_component(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u);
@@ -512,6 +495,18 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let jitterVec = vec2f(cos(heading + jitterAngle), sin(heading + jitterAngle));
   let threat = max(predatorThreat, fearThreat * 0.92);
   let trailInfluence = trailWeight / (1.0 + trailLevel * 0.7) * (1.0 - 0.84 * threat);
+  let wallMargin = max(20.0, min(worldW, worldH) * 0.08);
+  var wallAvoid = vec2f(0.0, 0.0);
+  if (mePos.x < wallMargin) {
+    wallAvoid.x = wallAvoid.x + (1.0 - mePos.x / wallMargin);
+  } else if (mePos.x > worldW - wallMargin) {
+    wallAvoid.x = wallAvoid.x - (1.0 - (worldW - mePos.x) / wallMargin);
+  }
+  if (mePos.y < wallMargin) {
+    wallAvoid.y = wallAvoid.y + (1.0 - mePos.y / wallMargin);
+  } else if (mePos.y > worldH - wallMargin) {
+    wallAvoid.y = wallAvoid.y - (1.0 - (worldH - mePos.y) / wallMargin);
+  }
 
   var desiredDir = forward * 0.28;
   desiredDir = desiredDir + alignmentVec * alignmentWeight;
@@ -525,6 +520,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   desiredDir = desiredDir + lateral * sideImbalance * congestion * 0.35;
   desiredDir = desiredDir + forward * trailSaturation * 0.14;
   desiredDir = desiredDir + jitterVec * (0.04 + lowTrail * 0.14 + 0.08 * threat);
+  desiredDir = desiredDir + wallAvoid * (0.9 + 0.7 * threat);
   if (length(desiredDir) <= 0.00001) {
     desiredDir = forward;
   }
@@ -544,10 +540,23 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let crowdFactor = clamp(f32(closeCount) / 6.0, 0.0, 1.0);
   let nextSpeed = cruiseSpeed * mix(1.0, 0.78, crowdFactor) * mix(1.0, 1.22, threat);
   let moveDir = vec2f(cos(nextHeading), sin(nextHeading));
-  let nextVel = moveDir * nextSpeed;
-  let nextPos = vec2f(
-    wrap_coordinate(mePos.x + nextVel.x * frameScale, worldW),
-    wrap_coordinate(mePos.y + nextVel.y * frameScale, worldH),
+  var nextVel = moveDir * nextSpeed;
+  var nextPos = mePos + nextVel * frameScale;
+  var boundedHeading = nextHeading;
+  var boundedTurnRate = nextTurnRate;
+  if (nextPos.x <= 0.0 || nextPos.x >= worldW) {
+    nextVel.x = -nextVel.x;
+    boundedHeading = atan2(nextVel.y, nextVel.x);
+    boundedTurnRate = 0.0;
+  }
+  if (nextPos.y <= 0.0 || nextPos.y >= worldH) {
+    nextVel.y = -nextVel.y;
+    boundedHeading = atan2(nextVel.y, nextVel.x);
+    boundedTurnRate = 0.0;
+  }
+  nextPos = vec2f(
+    clamp_coordinate(nextPos.x, worldW),
+    clamp_coordinate(nextPos.y, worldH),
   );
 
   let targetCellX = min(pherCols - 1u, u32(floor(nextPos.x / pherSpacing)));
@@ -564,7 +573,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   boidsOut[index] = BoidState(
     vec4f(nextPos, nextVel),
-    vec4f(nextHeading, 1.0, 1.0 - crowdFactor * 0.5, nextTurnRate),
+    vec4f(boundedHeading, 1.0, 1.0 - crowdFactor * 0.5, boundedTurnRate),
     me.bio,
   );
 }
@@ -603,26 +612,8 @@ struct SimParams {
 
 const MAX_PREDATORS: u32 = 16u;
 
-fn wrap_coordinate(value: f32, size: f32) -> f32 {
-  var result = value;
-  if (result < 0.0) {
-    result = result + size;
-  }
-  if (result >= size) {
-    result = result - size;
-  }
-  return result;
-}
-
-fn wrapped_delta(srcValue: f32, dstValue: f32, size: f32) -> f32 {
-  var delta = dstValue - srcValue;
-  let half = size * 0.5;
-  if (delta > half) {
-    delta = delta - size;
-  } else if (delta < -half) {
-    delta = delta + size;
-  }
-  return delta;
+fn clamp_coordinate(value: f32, size: f32) -> f32 {
+  return clamp(value, 0.0, max(size - 0.001, 0.0));
 }
 
 const TAU: f32 = 6.28318530718;
@@ -691,8 +682,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           select(1.18, 0.82, prefersForager),
           isApex,
         );
-        let dx = wrapped_delta(pred.posVel.x, boid.posVel.x, worldW);
-        let dy = wrapped_delta(pred.posVel.y, boid.posVel.y, worldH);
+        let dx = boid.posVel.x - pred.posVel.x;
+        let dy = boid.posVel.y - pred.posVel.y;
         let distSq = dx * dx + dy * dy;
         let weighted = distSq / max(preference, 0.2);
         if (weighted < bestDistSq) {
@@ -708,8 +699,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var targetDistance = 1e9;
     if (targetIndex >= 0 && targetIndex < i32(boidCount)) {
       let prey = boidsIn[u32(targetIndex)];
-      let tx = wrapped_delta(pred.posVel.x, prey.posVel.x, worldW);
-      let ty = wrapped_delta(pred.posVel.y, prey.posVel.y, worldH);
+      let tx = prey.posVel.x - pred.posVel.x;
+      let ty = prey.posVel.y - pred.posVel.y;
       let toPrey = vec2f(tx, ty);
       let tLen = length(toPrey);
       targetDistance = tLen;
@@ -731,8 +722,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         continue;
       }
       let other = snapshot[q];
-      let dx = wrapped_delta(pred.posVel.x, other.posVel.x, worldW);
-      let dy = wrapped_delta(pred.posVel.y, other.posVel.y, worldH);
+      let dx = other.posVel.x - pred.posVel.x;
+      let dy = other.posVel.y - pred.posVel.y;
       let distSq = dx * dx + dy * dy;
       if (distSq <= 0.0 || distSq > predatorSeparationRadiusSq) {
         continue;
@@ -746,7 +737,20 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       separate = separate / f32(separateCount);
     }
 
-    var desiredDir = chaseDir + separate * predatorSeparationWeight;
+    let wallMargin = max(20.0, min(worldW, worldH) * 0.09);
+    var wallAvoid = vec2f(0.0, 0.0);
+    if (pred.posVel.x < wallMargin) {
+      wallAvoid.x = wallAvoid.x + (1.0 - pred.posVel.x / wallMargin);
+    } else if (pred.posVel.x > worldW - wallMargin) {
+      wallAvoid.x = wallAvoid.x - (1.0 - (worldW - pred.posVel.x) / wallMargin);
+    }
+    if (pred.posVel.y < wallMargin) {
+      wallAvoid.y = wallAvoid.y + (1.0 - pred.posVel.y / wallMargin);
+    } else if (pred.posVel.y > worldH - wallMargin) {
+      wallAvoid.y = wallAvoid.y - (1.0 - (worldH - pred.posVel.y) / wallMargin);
+    }
+
+    var desiredDir = chaseDir + separate * predatorSeparationWeight + wallAvoid * 0.95;
     var desiredHeading = pred.headingTimers.x;
     if (length(desiredDir) > 0.0001) {
       desiredHeading = atan2(desiredDir.y, desiredDir.x);
@@ -786,10 +790,30 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     pred.headingTimers.x = nextHeading;
     pred.aux.w = nextTurnRate;
 
-    pred.posVel.z = cos(nextHeading) * predatorSpeed;
-    pred.posVel.w = sin(nextHeading) * predatorSpeed;
-    pred.posVel.x = wrap_coordinate(pred.posVel.x + pred.posVel.z * frameScale, worldW);
-    pred.posVel.y = wrap_coordinate(pred.posVel.y + pred.posVel.w * frameScale, worldH);
+    var nextVel = vec2f(cos(nextHeading), sin(nextHeading)) * predatorSpeed;
+    var nextPos = pred.posVel.xy + nextVel * frameScale;
+    var boundedHeading = nextHeading;
+    var boundedTurnRate = nextTurnRate;
+    if (nextPos.x <= 0.0 || nextPos.x >= worldW) {
+      nextVel.x = -nextVel.x;
+      boundedHeading = atan2(nextVel.y, nextVel.x);
+      boundedTurnRate = 0.0;
+    }
+    if (nextPos.y <= 0.0 || nextPos.y >= worldH) {
+      nextVel.y = -nextVel.y;
+      boundedHeading = atan2(nextVel.y, nextVel.x);
+      boundedTurnRate = 0.0;
+    }
+    nextPos = vec2f(
+      clamp_coordinate(nextPos.x, worldW),
+      clamp_coordinate(nextPos.y, worldH),
+    );
+    pred.posVel.x = nextPos.x;
+    pred.posVel.y = nextPos.y;
+    pred.posVel.z = nextVel.x;
+    pred.posVel.w = nextVel.y;
+    pred.headingTimers.x = boundedHeading;
+    pred.aux.w = boundedTurnRate;
     pred.aux.z = f32(targetIndex);
 
     predators[p] = pred;
@@ -930,17 +954,8 @@ struct SimParams {
 const PHEROMONE_MAX_POINTS: u32 = ${HEATMAP_MAX_POINTS}u;
 const TAU: f32 = 6.28318530718;
 
-fn wrap_index(value: i32, size: i32) -> u32 {
-  var v = value % size;
-  if (v < 0) {
-    v = v + size;
-  }
-  return u32(v);
-}
-
-fn wrapped_abs_delta(a: f32, b: f32, size: f32) -> f32 {
-  let direct = abs(a - b);
-  return min(direct, size - direct);
+fn bounded_abs_delta(a: f32, b: f32) -> f32 {
+  return abs(a - b);
 }
 
 fn hash_u32(x: u32) -> u32 {
@@ -957,9 +972,10 @@ fn read_pheromone(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec
   if (sampleCount == 0u || cols == 0u || rows == 0u) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
-  let sx = wrap_index(x, i32(cols));
-  let sy = wrap_index(y, i32(rows));
-  let idx = sy * cols + sx;
+  if (x < 0 || y < 0 || x >= i32(cols) || y >= i32(rows)) {
+    return vec4f(0.0, 0.0, 0.0, 0.0);
+  }
+  let idx = u32(y) * cols + u32(x);
   if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
@@ -1021,8 +1037,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         worldW * (0.5 + 0.34 * cos(orbit + 0.45 * sin(t * 0.33 + fk))),
         worldH * (0.5 + 0.28 * sin(orbit * 0.92 + fk * 0.37)),
       );
-      let dx = wrapped_abs_delta(samplePos.x, node.x, worldW);
-      let dy = wrapped_abs_delta(samplePos.y, node.y, worldH);
+      let dx = bounded_abs_delta(samplePos.x, node.x);
+      let dy = bounded_abs_delta(samplePos.y, node.y);
       let distSq = dx * dx + dy * dy;
       let spread = 1350.0 + 320.0 * fk;
       trail = trail + exp(-distSq / spread) * nodeSourceStrength * 0.34;
@@ -1034,8 +1050,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let hazardSpread = max(fearRadiusSq * 0.42, 1.0);
     for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
       let pred = predators[p];
-      let dx = wrapped_abs_delta(samplePos.x, pred.posVel.x, worldW);
-      let dy = wrapped_abs_delta(samplePos.y, pred.posVel.y, worldH);
+      let dx = bounded_abs_delta(samplePos.x, pred.posVel.x);
+      let dy = bounded_abs_delta(samplePos.y, pred.posVel.y);
       let distSq = dx * dx + dy * dy;
       if (distSq > fearRadiusSq * 4.0) {
         continue;
@@ -1162,26 +1178,11 @@ struct VSOut {
 @group(0) @binding(0) var<storage, read> boids: array<BoidState>;
 @group(0) @binding(1) var<uniform> params: SimParams;
 
-fn boid_vertex(vertexIndex: u32) -> vec2f {
-  if (vertexIndex == 0u) {
-    return vec2f(3.6, 0.0);
-  }
-  if (vertexIndex == 1u) {
-    return vec2f(-2.1, 1.6);
-  }
-  return vec2f(-2.1, -1.6);
-}
-
 @vertex
 fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
   let boid = boids[instanceIndex];
-  let heading = boid.headingTurn.x;
-  let c = cos(heading);
-  let s = sin(heading);
-
-  let local = boid_vertex(vertexIndex);
-  let rotated = vec2f(local.x * c - local.y * s, local.x * s + local.y * c);
-  let world = boid.posVel.xy + rotated;
+  let _unusedVertex = vertexIndex;
+  let world = boid.posVel.xy;
 
   let clipX = world.x / params.world.x * 2.0 - 1.0;
   let clipY = 1.0 - world.y / params.world.y * 2.0;
@@ -1440,9 +1441,8 @@ struct SimParams {
 const MIN_SAMPLES: u32 = 96u;
 const MAX_SAMPLES: u32 = 768u;
 
-fn wrapped_abs_delta(a: f32, b: f32, size: f32) -> f32 {
-  let direct = abs(a - b);
-  return min(direct, size - direct);
+fn bounded_abs_delta(a: f32, b: f32) -> f32 {
+  return abs(a - b);
 }
 
 fn hash_u32(x: u32) -> u32 {
@@ -1492,8 +1492,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var density = 0.0;
   for (var i: u32 = 0u; i < sampleBoids; i = i + 1u) {
     let boid = boids[boidIndex];
-    let dx = wrapped_abs_delta(samplePos.x, boid.posVel.x, worldW);
-    let dy = wrapped_abs_delta(samplePos.y, boid.posVel.y, worldH);
+    let dx = bounded_abs_delta(samplePos.x, boid.posVel.x);
+    let dy = bounded_abs_delta(samplePos.y, boid.posVel.y);
     let distSq = dx * dx + dy * dy;
     if (distSq < densityRadiusSq) {
       density = density + exp(-distSq / max(densityRadiusSq * 0.62, 0.0001));
@@ -1686,9 +1686,10 @@ function updateTextState(mode = 'running') {
     ],
     dynamicSystems: [
       'flocking_flow_fields',
-      'toroidal_wrap',
+      'bounded_edges',
       'crowding_feedback',
     ],
+    boundaryMode: 'solid_bounce',
     coordinateSystem: 'origin top-left, +x right, +y down',
     viewport: { width: worldWidth, height: worldHeight },
     particleCount: BOID_COUNT,
@@ -2107,7 +2108,7 @@ function renderFrame() {
     } else {
       renderPass.setPipeline(gpu.boidRenderPipeline);
       renderPass.setBindGroup(0, boidRenderBindGroup);
-      renderPass.draw(3, BOID_COUNT, 0, 0);
+      renderPass.draw(1, BOID_COUNT, 0, 0);
     }
 
     if (renderMode !== 'pheromone') {
@@ -2459,7 +2460,7 @@ async function initWebGPU() {
       targets: [{ format }],
     },
     primitive: {
-      topology: 'triangle-list',
+      topology: 'point-list',
       cullMode: 'none',
     },
   });
