@@ -46,8 +46,8 @@ const heatmapCpuValue = document.getElementById('heatmapCpuValue');
 const renderCpuValue = document.getElementById('renderCpuValue');
 
 const FIXED_STEP = 1 / 60;
-const BOID_COUNT = 10000;
-const PREDATOR_COUNT = 3;
+const BOID_COUNT = 15000;
+const PREDATOR_COUNT = 1;
 const BOID_WORKGROUP_SIZE = 128;
 const CATCH_CLEAR_WORKGROUP_SIZE = 32;
 const HEATMAP_WORKGROUP_SIZE = 128;
@@ -82,7 +82,6 @@ const PHYS_NODE_SOURCE_STRENGTH = 0.08;
 const config = {
   perceptionRadius: 92,
   separationRadius: 18,
-  predatorAvoidRadius: 125,
   maxSpeed: 1.7,
   minSpeed: Number(minSpeedRange.value),
   maxForce: 0.04,
@@ -91,13 +90,16 @@ const config = {
   alignWeight: 0.34,
   cohesionWeight: 0.07,
   separationWeight: 0.52,
-  predatorAvoidWeight: 2.4,
+  predatorAvoidWeight: 2.95,
   predatorCatchRadius: 9,
+  predatorAvoidRadius: 132,
+  predatorFearStrength: 0.18,
+  predatorFearRadius: 72,
   predatorSeparationRadius: 50,
   predatorSeparationWeight: 1.8,
-  predatorTurnRateFactor: 0.85,
-  predatorTurnAccelerationFactor: 0.8,
-  predatorSpeedFactor: 1.03,
+  predatorTurnRateFactor: 0.78,
+  predatorTurnAccelerationFactor: 0.72,
+  predatorSpeedFactor: 0.9,
   predatorAttentionSeconds: Number(predatorAttentionRange.value),
   heatmapDotSpacingPx: Number(heatmapSpacingRange?.value || HEATMAP_DOT_SPACING),
   heatmapDotRadiusPx: Number(heatmapDotRadiusRange?.value || HEATMAP_DOT_RADIUS),
@@ -112,7 +114,7 @@ const config = {
   panicBoost: Number(panicBoostRange?.value || 1.2),
   metabolismIntensity: Number(metabolismRange?.value || 1.0),
   boidSprintBoost: Number(boidSprintBoostRange?.value || 0.9),
-  predatorSprintBoost: Number(predatorSprintBoostRange?.value || 1.05),
+  predatorSprintBoost: Number(predatorSprintBoostRange?.value || 0.2),
   confusionStrength: Number(confusionStrengthRange?.value || 0.62),
   mutationRate: Number(mutationRateRange?.value || 0.07),
   physSensorAngle: PHYS_SENSOR_ANGLE,
@@ -157,6 +159,7 @@ const perfStats = {
 const ecologyStats = {
   avgSpeed: Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25)),
   avgPredatorSpeed: 0,
+  boidsNearPredatorsFraction: 0,
   movedFraction: 0,
   movesPerSecond: 0,
   blockedMoveRate: 0,
@@ -171,6 +174,12 @@ struct BoidState {
   posVel: vec4f,
   headingTurn: vec4f,
   bio: vec4f,
+};
+
+struct PredatorState {
+  posVel: vec4f,
+  headingTimers: vec4f,
+  aux: vec4f,
 };
 
 struct PheromoneSample {
@@ -193,6 +202,7 @@ struct SimParams {
 
 @group(0) @binding(0) var<storage, read> boidsIn: array<BoidState>;
 @group(0) @binding(1) var<storage, read_write> boidsOut: array<BoidState>;
+@group(0) @binding(2) var<storage, read> predators: array<PredatorState>;
 @group(0) @binding(3) var<storage, read> pheromones: array<PheromoneSample>;
 @group(0) @binding(4) var<storage, read_write> occupancyClaims: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> cellCounts: array<atomic<u32>>;
@@ -297,7 +307,15 @@ fn rand01(seed: u32) -> f32 {
   return f32(hash_u32(seed)) / 4294967295.0;
 }
 
-fn sensor_mean(sensorPos: vec2f, radius: i32, cols: u32, rows: u32, sampleCount: u32, spacing: f32) -> f32 {
+fn sensor_mean_component(
+  sensorPos: vec2f,
+  radius: i32,
+  cols: u32,
+  rows: u32,
+  sampleCount: u32,
+  spacing: f32,
+  component: u32,
+) -> f32 {
   if (sampleCount == 0u || spacing <= 0.0) {
     return 0.0;
   }
@@ -308,7 +326,15 @@ fn sensor_mean(sensorPos: vec2f, radius: i32, cols: u32, rows: u32, sampleCount:
   for (var oy: i32 = -radius; oy <= radius; oy = oy + 1) {
     for (var ox: i32 = -radius; ox <= radius; ox = ox + 1) {
       let sample = read_pheromone_sample(baseX + ox, baseY + oy, cols, rows, sampleCount);
-      sum = sum + sample.x;
+      var sampleValue = sample.x;
+      if (component == 1u) {
+        sampleValue = sample.y;
+      } else if (component == 2u) {
+        sampleValue = sample.z;
+      } else if (component == 3u) {
+        sampleValue = sample.w;
+      }
+      sum = sum + sampleValue;
       count = count + 1.0;
     }
   }
@@ -328,6 +354,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let dt = max(params.world.z, 0.0001);
   let frameScale = params.world.w;
 
+  let predatorCount = u32(params.counts.y);
   let pherSpacing = max(params.heatmapA.x, 0.75);
   let pherCols = max(1u, u32(floor(worldW / pherSpacing)));
   let pherRows = max(1u, u32(floor(worldH / pherSpacing)));
@@ -349,6 +376,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let trailWeight = max(0.0, params.boidC.w);
   let perceptionRadius = max(10.0, params.predatorA.z);
   let separationRadius = max(5.0, params.predatorA.w);
+  let predatorAvoidWeight = max(0.0, params.predatorA.x);
+  let predatorAvoidRadius = max(8.0, params.lifeA.z);
+  let predatorAvoidRadiusSq = predatorAvoidRadius * predatorAvoidRadius;
+  let fearAvoidWeight = max(0.0, params.lifeA.w);
   let perceptionRadiusSq = perceptionRadius * perceptionRadius;
   let separationRadiusSq = separationRadius * separationRadius;
   let sensorRadius = i32(max(0.0, floor(sensorWidth * 0.5)));
@@ -357,6 +388,28 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let mePos = me.posVel.xy;
   let heading = me.headingTurn.x;
   let currentTurnRate = me.headingTurn.w;
+
+  var predatorAvoidVec = vec2f(0.0, 0.0);
+  var predatorThreat = 0.0;
+  var predatorAvoidCount = 0u;
+  for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
+    let pred = predators[p];
+    let dx = wrapped_delta(mePos.x, pred.posVel.x, worldW);
+    let dy = wrapped_delta(mePos.y, pred.posVel.y, worldH);
+    let delta = vec2f(dx, dy);
+    let distSq = dot(delta, delta);
+    if (distSq <= 0.0001 || distSq > predatorAvoidRadiusSq) {
+      continue;
+    }
+    let dist = sqrt(distSq);
+    let proximity = 1.0 - dist / predatorAvoidRadius;
+    predatorThreat = max(predatorThreat, proximity);
+    predatorAvoidVec = predatorAvoidVec - (delta / max(dist, 0.0001)) * (0.35 + 0.65 * proximity);
+    predatorAvoidCount = predatorAvoidCount + 1u;
+  }
+  if (predatorAvoidCount > 0u) {
+    predatorAvoidVec = safe_normalize(predatorAvoidVec / f32(predatorAvoidCount));
+  }
 
   let cx = min(gridCols - 1u, u32(floor(mePos.x / GRID_CELL_SIZE)));
   let cy = min(gridRows - 1u, u32(floor(mePos.y / GRID_CELL_SIZE)));
@@ -429,9 +482,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     wrap_coordinate(mePos.x + dirR.x * sensorOffset, worldW),
     wrap_coordinate(mePos.y + dirR.y * sensorOffset, worldH),
   );
-  let F = sensor_mean(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing);
-  let FL = sensor_mean(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing);
-  let FR = sensor_mean(sensorPosR, sensorRadius, pherCols, pherRows, pherCount, pherSpacing);
+  let F = sensor_mean_component(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u);
+  let FL = sensor_mean_component(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u);
+  let FR = sensor_mean_component(sensorPosR, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u);
+  let fearF = sensor_mean_component(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u);
+  let fearL = sensor_mean_component(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u);
+  let fearR = sensor_mean_component(sensorPosR, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u);
+  let fearVec = safe_normalize(dirF * fearF + dirL * fearL + dirR * fearR);
+  let fearLevel = max(0.0, (fearF + fearL + fearR) * 0.33333334);
+  let fearThreat = clamp(fearLevel * 1.8, 0.0, 1.0);
   let meCellX = i32(floor(mePos.x / pherSpacing));
   let meCellY = i32(floor(mePos.y / pherSpacing));
   let trailLeft = read_pheromone_sample(meCellX - 1, meCellY, pherCols, pherRows, pherCount).x;
@@ -451,18 +510,21 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let seed = u32(params.counts.z) * 1664525u + index * 1013904223u + 23u;
   let jitterAngle = (rand01(seed) - 0.5) * 0.45;
   let jitterVec = vec2f(cos(heading + jitterAngle), sin(heading + jitterAngle));
-  let trailInfluence = trailWeight / (1.0 + trailLevel * 0.7);
+  let threat = max(predatorThreat, fearThreat * 0.92);
+  let trailInfluence = trailWeight / (1.0 + trailLevel * 0.7) * (1.0 - 0.84 * threat);
 
   var desiredDir = forward * 0.28;
   desiredDir = desiredDir + alignmentVec * alignmentWeight;
   desiredDir = desiredDir + cohesionVec * cohesionWeight;
   desiredDir = desiredDir + separationVec * separationWeight;
+  desiredDir = desiredDir + predatorAvoidVec * predatorAvoidWeight * (0.55 + threat * 1.25);
+  desiredDir = desiredDir - fearVec * fearAvoidWeight * (0.35 + fearThreat * 1.25);
   desiredDir = desiredDir + trailSteerVec * trailInfluence;
   desiredDir = desiredDir - trailSteerVec * trailSaturation * 0.56;
   desiredDir = desiredDir + antiTrailGradient * congestion * 0.95;
   desiredDir = desiredDir + lateral * sideImbalance * congestion * 0.35;
   desiredDir = desiredDir + forward * trailSaturation * 0.14;
-  desiredDir = desiredDir + jitterVec * (0.04 + lowTrail * 0.14);
+  desiredDir = desiredDir + jitterVec * (0.04 + lowTrail * 0.14 + 0.08 * threat);
   if (length(desiredDir) <= 0.00001) {
     desiredDir = forward;
   }
@@ -480,7 +542,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let nextHeading = normalize_angle(heading + nextTurnRate * dt);
 
   let crowdFactor = clamp(f32(closeCount) / 6.0, 0.0, 1.0);
-  let nextSpeed = cruiseSpeed * mix(1.0, 0.78, crowdFactor);
+  let nextSpeed = cruiseSpeed * mix(1.0, 0.78, crowdFactor) * mix(1.0, 1.22, threat);
   let moveDir = vec2f(cos(nextHeading), sin(nextHeading));
   let nextVel = moveDir * nextSpeed;
   let nextPos = vec2f(
@@ -599,7 +661,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let predatorSeparationWeight = params.predatorA.w;
 
   let predatorSprintBoost = max(params.predatorB.x, 0.0);
-  let predatorCruiseSpeed = params.boidB.x * params.predatorB.y;
+  let predatorCruiseSpeed = params.boidA.w * params.predatorB.y;
   let predatorMaxTurnRate = params.predatorB.z;
   let predatorMaxTurnAcceleration = params.predatorB.w;
 
@@ -839,6 +901,12 @@ struct PheromoneSample {
   values: vec4f,
 };
 
+struct PredatorState {
+  posVel: vec4f,
+  headingTimers: vec4f,
+  aux: vec4f,
+};
+
 struct SimParams {
   world: vec4f,
   counts: vec4f,
@@ -853,6 +921,7 @@ struct SimParams {
   lifeB: vec4f,
 };
 
+@group(0) @binding(0) var<storage, read> predators: array<PredatorState>;
 @group(0) @binding(2) var<storage, read> pheromonePrev: array<PheromoneSample>;
 @group(0) @binding(3) var<storage, read_write> pheromoneNext: array<PheromoneSample>;
 @group(0) @binding(4) var<uniform> params: SimParams;
@@ -913,21 +982,29 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let sx = idx % cols;
   let sy = idx / cols;
   let samplePos = vec2f((f32(sx) + 0.5) * spacing, (f32(sy) + 0.5) * spacing);
-  let center = read_pheromone(i32(sx), i32(sy), cols, rows, sampleCount).x;
+  let center = read_pheromone(i32(sx), i32(sy), cols, rows, sampleCount);
 
   let diffuseMix = clamp(params.boidB.z, 0.0, 1.0);
+  let fearDiffuseMix = clamp(params.lifeB.z, 0.0, 1.0);
   let decay = clamp(params.boidB.w, 0.0, 0.95);
   let depositAmount = max(params.lifeA.x, 0.0);
   let nodeSourceStrength = max(params.lifeA.y, 0.0);
+  let predatorCount = u32(params.counts.y);
+  let fearStrength = max(params.lifeB.x, 0.0);
+  let fearRadius = max(params.lifeB.y, spacing * 2.0);
+  let fearRadiusSq = fearRadius * fearRadius;
 
-  var neighborSum = 0.0;
+  var neighborSum = vec4f(0.0, 0.0, 0.0, 0.0);
   for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
     for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
-      neighborSum = neighborSum + read_pheromone(i32(sx) + ox, i32(sy) + oy, cols, rows, sampleCount).x;
+      neighborSum = neighborSum + read_pheromone(i32(sx) + ox, i32(sy) + oy, cols, rows, sampleCount);
     }
   }
   let neighborMean = neighborSum * (1.0 / 9.0);
-  var trail = center + (neighborMean - center) * diffuseMix;
+  var trail = center.x + (neighborMean.x - center.x) * diffuseMix;
+  var fear = center.y + (neighborMean.y - center.y) * fearDiffuseMix;
+  var food = center.z + (neighborMean.z - center.z) * diffuseMix;
+  var hazard = center.w + (neighborMean.w - center.w) * diffuseMix;
 
   let claim = atomicLoad(&occupancyClaims[idx]);
   if (claim > 0u) {
@@ -952,8 +1029,28 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
 
+  if (fearStrength > 0.00001 && predatorCount > 0u) {
+    let fearSpread = max(fearRadiusSq * 0.7, 1.0);
+    let hazardSpread = max(fearRadiusSq * 0.42, 1.0);
+    for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
+      let pred = predators[p];
+      let dx = wrapped_abs_delta(samplePos.x, pred.posVel.x, worldW);
+      let dy = wrapped_abs_delta(samplePos.y, pred.posVel.y, worldH);
+      let distSq = dx * dx + dy * dy;
+      if (distSq > fearRadiusSq * 4.0) {
+        continue;
+      }
+      let apexScale = select(1.0, 1.35, pred.aux.y > 0.5);
+      fear = fear + exp(-distSq / fearSpread) * fearStrength * 0.72 * apexScale;
+      hazard = hazard + exp(-distSq / hazardSpread) * fearStrength * 0.08 * apexScale;
+    }
+  }
+
   trail = clamp(trail * (1.0 - decay), 0.0, 9.0);
-  pheromoneNext[idx].values = vec4f(trail, 0.0, 0.0, 0.0);
+  fear = clamp(fear * (1.0 - decay * 0.92), 0.0, 9.0);
+  food = clamp(food * (1.0 - decay), 0.0, 9.0);
+  hazard = clamp(hazard * (1.0 - decay), 0.0, 9.0);
+  pheromoneNext[idx].values = vec4f(trail, fear, food, hazard);
 }
 `;
 
@@ -1449,7 +1546,8 @@ struct SimParams {
 
 struct VSOut {
   @builtin(position) position: vec4f,
-  @location(0) color: vec3f,
+  @location(0) local: vec2f,
+  @location(1) color: vec3f,
 };
 
 @group(0) @binding(0) var<storage, read> predators: array<PredatorState>;
@@ -1457,37 +1555,44 @@ struct VSOut {
 
 fn predator_vertex(vertexIndex: u32) -> vec2f {
   if (vertexIndex == 0u) {
-    return vec2f(11.5, 0.0);
+    return vec2f(-1.0, -1.0);
   }
   if (vertexIndex == 1u) {
-    return vec2f(-6.8, 4.4);
+    return vec2f(1.0, -1.0);
   }
-  return vec2f(-6.8, -4.4);
+  if (vertexIndex == 2u) {
+    return vec2f(-1.0, 1.0);
+  }
+  if (vertexIndex == 3u) {
+    return vec2f(-1.0, 1.0);
+  }
+  if (vertexIndex == 4u) {
+    return vec2f(1.0, -1.0);
+  }
+  return vec2f(1.0, 1.0);
 }
 
 @vertex
 fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
   let predator = predators[instanceIndex];
-  let heading = predator.headingTimers.x;
-  let c = cos(heading);
-  let s = sin(heading);
-
   let local = predator_vertex(vertexIndex);
-  let rotated = vec2f(local.x * c - local.y * s, local.x * s + local.y * c);
-  let world = predator.posVel.xy + rotated;
+  let world = predator.posVel.xy + local * 2.15;
 
   let clipX = world.x / params.world.x * 2.0 - 1.0;
   let clipY = 1.0 - world.y / params.world.y * 2.0;
-  let isApex = predator.aux.y > 0.5;
 
   var out: VSOut;
   out.position = vec4f(clipX, clipY, 0.0, 1.0);
-  out.color = select(vec3f(1.0, 0.36, 0.38), vec3f(0.96, 0.72, 0.22), isApex);
+  out.local = local;
+  out.color = vec3f(1.0, 0.2, 0.25);
   return out;
 }
 
 @fragment
 fn fsMain(in: VSOut) -> @location(0) vec4f {
+  if (dot(in.local, in.local) > 1.0) {
+    discard;
+  }
   return vec4f(in.color, 1.0);
 }
 `;
@@ -1545,8 +1650,8 @@ function createInitialPredatorData() {
   for (let i = 0; i < PREDATOR_COUNT; i += 1) {
     const heading = rand(0, Math.PI * 2);
     const base = i * PREDATOR_FLOATS;
-    const predatorType = i === 0 ? 1 : 0; // one apex, rest hunters
-    const speedScale = predatorType === 1 ? 0.9 : 1;
+    const predatorType = 0;
+    const speedScale = 1;
 
     data[base + 0] = rand(0, worldWidth);
     data[base + 1] = rand(0, worldHeight);
@@ -1621,6 +1726,7 @@ function updateTextState(mode = 'running') {
     minSpeed: Number(minSpeedRange.value),
     avgSpeed: ecologyStats.avgSpeed,
     avgPredatorSpeed: ecologyStats.avgPredatorSpeed,
+    boidsNearPredatorsFraction: ecologyStats.boidsNearPredatorsFraction,
     predatorSamples: ecologyStats.predatorSamples,
     movedFraction: ecologyStats.movedFraction,
     movesPerSecond: ecologyStats.movesPerSecond,
@@ -1658,8 +1764,8 @@ function createParamsArray(dtSeconds) {
     config.predatorSprintBoost, config.predatorSpeedFactor, predatorMaxTurnRate, predatorMaxTurnAcceleration,
     getHeatmapDotSpacingWorld(), getHeatmapDotRadiusWorld(), getHeatmapDiffuseRadiusWorld(), config.heatmapSampleBudget,
     config.heatmapTrendGain, config.heatmapTrendDeadband, config.pherDiffusion, config.pherDecay,
-    config.physDeposit, config.physNodeSourceStrength, config.panicBoost, config.pherDecay * 1.35,
-    config.metabolismIntensity, config.boidSprintBoost, config.confusionStrength, config.mutationRate,
+    config.physDeposit, config.physNodeSourceStrength, config.predatorAvoidRadius, 0.25 + config.predatorFearStrength * 0.9,
+    config.predatorFearStrength, config.predatorFearRadius, config.physDiffuseMix, config.mutationRate,
   ]);
 }
 
@@ -1755,6 +1861,32 @@ function maybeScheduleEcologyReadback(timestampMs) {
         });
       }
 
+      let nearPredatorCount = 0;
+      const avoidRadius = Math.max(8, config.predatorAvoidRadius);
+      const avoidRadiusSq = avoidRadius * avoidRadius;
+      for (let i = 0; i < count; i += 1) {
+        const base = i * BOID_FLOATS;
+        const bx = boidSample[base + 0] || 0;
+        const by = boidSample[base + 1] || 0;
+        let nearAny = false;
+        for (let p = 0; p < predatorCount; p += 1) {
+          const pBase = p * PREDATOR_FLOATS;
+          const px = predatorSample[pBase + 0] || 0;
+          const py = predatorSample[pBase + 1] || 0;
+          let dx = Math.abs(px - bx);
+          let dy = Math.abs(py - by);
+          if (dx > worldWidth * 0.5) dx = worldWidth - dx;
+          if (dy > worldHeight * 0.5) dy = worldHeight - dy;
+          if (dx * dx + dy * dy <= avoidRadiusSq) {
+            nearAny = true;
+            break;
+          }
+        }
+        if (nearAny) {
+          nearPredatorCount += 1;
+        }
+      }
+
       const nowMs = performance.now();
       if (ecologyStats.lastCounterSampleAtMs === 0) {
         ecologyStats.lastCounterSampleAtMs = nowMs - ECOLOGY_READBACK_INTERVAL_MS;
@@ -1770,6 +1902,9 @@ function maybeScheduleEcologyReadback(timestampMs) {
       ecologyStats.avgPredatorSpeed =
         ecologyStats.avgPredatorSpeed + (predatorAvg - ecologyStats.avgPredatorSpeed) * alpha;
       ecologyStats.predatorSamples = predatorSamples;
+      ecologyStats.boidsNearPredatorsFraction =
+        ecologyStats.boidsNearPredatorsFraction +
+        (nearPredatorCount / count - ecologyStats.boidsNearPredatorsFraction) * alpha;
       ecologyStats.movedFraction = ecologyStats.movedFraction + (movedCount / count - ecologyStats.movedFraction) * alpha;
       ecologyStats.movesPerSecond =
         ecologyStats.movesPerSecond + (movedCounter / elapsedSeconds - ecologyStats.movesPerSecond) * alpha;
@@ -1826,6 +1961,9 @@ function reseedSimulation() {
   currentHeatmapBufferIndex = 0;
   currentPheromoneBufferIndex = 0;
   ecologyStats.avgSpeed = Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25));
+  ecologyStats.avgPredatorSpeed = 0;
+  ecologyStats.boidsNearPredatorsFraction = 0;
+  ecologyStats.predatorSamples = [];
   ecologyStats.movedFraction = 0;
   ecologyStats.movesPerSecond = 0;
   ecologyStats.blockedMoveRate = 0;
@@ -1972,9 +2110,11 @@ function renderFrame() {
       renderPass.draw(3, BOID_COUNT, 0, 0);
     }
 
-    renderPass.setPipeline(gpu.predatorRenderPipeline);
-    renderPass.setBindGroup(0, predatorRenderBindGroup);
-    renderPass.draw(3, PREDATOR_COUNT, 0, 0);
+    if (renderMode !== 'pheromone') {
+      renderPass.setPipeline(gpu.predatorRenderPipeline);
+      renderPass.setBindGroup(0, predatorRenderBindGroup);
+      renderPass.draw(6, PREDATOR_COUNT, 0, 0);
+    }
   } finally {
     renderPass.end();
   }
@@ -2414,6 +2554,7 @@ async function initWebGPU() {
         entries: [
           { binding: 0, resource: { buffer: boidBuffers[0] } },
           { binding: 1, resource: { buffer: boidBuffers[1] } },
+          { binding: 2, resource: { buffer: predatorBuffer } },
           { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 4, resource: { buffer: occupancyBuffer } },
           { binding: 5, resource: { buffer: gridCellCountBuffer } },
@@ -2427,6 +2568,7 @@ async function initWebGPU() {
         entries: [
           { binding: 0, resource: { buffer: boidBuffers[0] } },
           { binding: 1, resource: { buffer: boidBuffers[1] } },
+          { binding: 2, resource: { buffer: predatorBuffer } },
           { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 4, resource: { buffer: occupancyBuffer } },
           { binding: 5, resource: { buffer: gridCellCountBuffer } },
@@ -2442,6 +2584,7 @@ async function initWebGPU() {
         entries: [
           { binding: 0, resource: { buffer: boidBuffers[1] } },
           { binding: 1, resource: { buffer: boidBuffers[0] } },
+          { binding: 2, resource: { buffer: predatorBuffer } },
           { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 4, resource: { buffer: occupancyBuffer } },
           { binding: 5, resource: { buffer: gridCellCountBuffer } },
@@ -2455,6 +2598,7 @@ async function initWebGPU() {
         entries: [
           { binding: 0, resource: { buffer: boidBuffers[1] } },
           { binding: 1, resource: { buffer: boidBuffers[0] } },
+          { binding: 2, resource: { buffer: predatorBuffer } },
           { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 4, resource: { buffer: occupancyBuffer } },
           { binding: 5, resource: { buffer: gridCellCountBuffer } },
@@ -2524,6 +2668,7 @@ async function initWebGPU() {
       device.createBindGroup({
         layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
         entries: [
+          { binding: 0, resource: { buffer: predatorBuffer } },
           { binding: 2, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 4, resource: { buffer: paramsBuffer } },
@@ -2533,6 +2678,7 @@ async function initWebGPU() {
       device.createBindGroup({
         layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
         entries: [
+          { binding: 0, resource: { buffer: predatorBuffer } },
           { binding: 2, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 4, resource: { buffer: paramsBuffer } },
@@ -2544,6 +2690,7 @@ async function initWebGPU() {
       device.createBindGroup({
         layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
         entries: [
+          { binding: 0, resource: { buffer: predatorBuffer } },
           { binding: 2, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 3, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 4, resource: { buffer: paramsBuffer } },
@@ -2553,6 +2700,7 @@ async function initWebGPU() {
       device.createBindGroup({
         layout: pheromoneUpdatePipeline.getBindGroupLayout(0),
         entries: [
+          { binding: 0, resource: { buffer: predatorBuffer } },
           { binding: 2, resource: { buffer: pheromoneBuffers[1] } },
           { binding: 3, resource: { buffer: pheromoneBuffers[0] } },
           { binding: 4, resource: { buffer: paramsBuffer } },
