@@ -10,7 +10,7 @@
     <main>
       <header>
         <h1>Boids Simulation</h1>
-        <p>30000 boids, fixed count.</p>
+        <p>100000 boids, adjustable count.</p>
       </header>
 
       <section class="sim-layout">
@@ -19,115 +19,106 @@
         </section>
 
         <aside class="controls" aria-label="Simulation controls">
-          <section class="control-section" aria-label="Boid motion controls">
-            <h2 class="control-title">Boids</h2>
-            <p class="fixed-count">Count: <strong>30000</strong> (fixed)</p>
-            <label class="control-group" for="turnAccelRange">
-              <span>Turn Accel: <strong id="turnAccelValue">340</strong> deg/s²</span>
-              <input id="turnAccelRange" type="range" min="120" max="2400" step="20" value="340" />
-            </label>
-            <label class="control-group" for="minSpeedRange">
-              <span>Min Speed: <strong id="minSpeedValue">0.55</strong></span>
-              <input id="minSpeedRange" type="range" min="0" max="1.6" step="0.05" value="0.55" />
-            </label>
+          <details class="control-section control-dropdown" open aria-label="Primary action controls">
+            <summary class="control-title">Buttons</summary>
+            <p class="fixed-count">Boundary: <strong id="boundaryModeValue">Wrap</strong></p>
+            <button id="boundaryModeToggle" class="secondary" type="button" aria-pressed="true">Boundary: Wrap</button>
             <button id="viewToggleButton" class="secondary" type="button" aria-pressed="false">View: Arrows</button>
-          </section>
+            <button id="restartButton" type="button">Reseed</button>
+          </details>
 
-          <section class="control-section" aria-label="Trail source controls">
-            <h2 class="control-title">Trail Sources</h2>
-            <p class="fixed-count">Nodes: <strong>6</strong> (drifting)</p>
-            <label class="control-group" for="predatorAttentionRange">
-              <span>Source Strength: <strong id="predatorAttentionValue">0.08</strong></span>
-              <input id="predatorAttentionRange" type="range" min="0.00" max="2.00" step="0.02" value="0.08" />
+          <details class="control-section control-dropdown" open aria-label="Important simulation sliders">
+            <summary class="control-title">Important Sliders</summary>
+            <label class="control-group" for="boidCountRange">
+              <span>Count: <strong id="boidCountValue">100000</strong></span>
+              <input id="boidCountRange" type="range" min="0" max="0" step="1" value="0" />
             </label>
-          </section>
-
-          <section class="control-section" aria-label="Heatmap controls">
-            <h2 class="control-title">Heatmap</h2>
-            <label class="control-group" for="heatmapSpacingRange">
-              <span>Dot Spacing: <strong id="heatmapSpacingValue">8.0</strong> px</span>
-              <input id="heatmapSpacingRange" type="range" min="3" max="14" step="0.5" value="8.0" />
-            </label>
-            <label class="control-group" for="heatmapDotRadiusRange">
-              <span>Dot Size: <strong id="heatmapDotRadiusValue">3.5</strong> px</span>
-              <input id="heatmapDotRadiusRange" type="range" min="1.25" max="8" step="0.25" value="3.5" />
-            </label>
-            <label class="control-group" for="heatmapDiffuseRange">
-              <span>Diffuse Radius: <strong id="heatmapDiffuseValue">22</strong> px</span>
-              <input id="heatmapDiffuseRange" type="range" min="8" max="40" step="1" value="22" />
-            </label>
-            <label class="control-group" for="heatmapSamplesRange">
-              <span>Sample Budget: <strong id="heatmapSamplesValue">320</strong></span>
-              <input id="heatmapSamplesRange" type="range" min="96" max="768" step="32" value="320" />
-            </label>
-            <label class="control-group" for="heatmapTrendGainRange">
-              <span>Trend Gain: <strong id="heatmapTrendGainValue">4.2</strong></span>
-              <input id="heatmapTrendGainRange" type="range" min="1.0" max="9.0" step="0.1" value="4.2" />
-            </label>
-            <label class="control-group" for="heatmapTrendDeadbandRange">
-              <span>Trend Deadband: <strong id="heatmapTrendDeadbandValue">0.045</strong></span>
-              <input id="heatmapTrendDeadbandRange" type="range" min="0.005" max="0.18" step="0.005" value="0.045" />
-            </label>
-          </section>
-
-          <section class="control-section" aria-label="Physarum controls">
-            <h2 class="control-title">Physarum</h2>
             <label class="control-group" for="pherTrailWeightRange">
-              <span>Trail Deposit: <strong id="pherTrailWeightValue">0.65</strong></span>
-              <input id="pherTrailWeightRange" type="range" min="0.10" max="4.00" step="0.05" value="0.65" />
+              <span>Trail Deposit: <strong id="pherTrailWeightValue">0.12</strong></span>
+              <input id="pherTrailWeightRange" type="range" min="0.00" max="1.50" step="0.01" value="0.12" />
             </label>
-            <label class="control-group" for="pherFearWeightRange">
-              <span>Sensor Offset: <strong id="pherFearWeightValue">10.5</strong></span>
-              <input id="pherFearWeightRange" type="range" min="2.0" max="24.0" step="0.5" value="10.5" />
-            </label>
-            <label class="control-group" for="pherDiffusionRange">
-              <span>Trail Diffusion: <strong id="pherDiffusionValue">0.36</strong></span>
-              <input id="pherDiffusionRange" type="range" min="0.02" max="0.95" step="0.01" value="0.36" />
-            </label>
-            <label class="control-group" for="pherDecayRange">
-              <span>Trail Decay: <strong id="pherDecayValue">0.050</strong></span>
-              <input id="pherDecayRange" type="range" min="0.001" max="0.200" step="0.001" value="0.050" />
-            </label>
-            <label class="control-group" for="panicBoostRange">
-              <span>Turn Rate Limit: <strong id="panicBoostValue">170</strong> deg/s</span>
-              <input id="panicBoostRange" type="range" min="40" max="600" step="5" value="170" />
-            </label>
-          </section>
+          </details>
 
-          <section class="control-section" aria-label="Ecology controls">
-            <h2 class="control-title">Ecology</h2>
-            <label class="control-group" for="metabolismRange">
-              <span>Metabolism: <strong id="metabolismValue">1.00</strong></span>
-              <input id="metabolismRange" type="range" min="0.4" max="2.2" step="0.05" value="1.00" />
-            </label>
-            <label class="control-group" for="boidSprintBoostRange">
-              <span>Boid Sprint: <strong id="boidSprintBoostValue">0.90</strong></span>
-              <input id="boidSprintBoostRange" type="range" min="0.1" max="2.2" step="0.05" value="0.90" />
-            </label>
-            <label class="control-group" for="predatorSprintBoostRange">
-              <span>Predator Sprint: <strong id="predatorSprintBoostValue">0.20</strong></span>
-              <input id="predatorSprintBoostRange" type="range" min="0.1" max="2.6" step="0.05" value="0.20" />
-            </label>
-            <label class="control-group" for="confusionStrengthRange">
-              <span>Confusion Effect: <strong id="confusionStrengthValue">0.62</strong></span>
-              <input id="confusionStrengthRange" type="range" min="0" max="1.5" step="0.02" value="0.62" />
-            </label>
-            <label class="control-group" for="mutationRateRange">
-              <span>Mutation Rate: <strong id="mutationRateValue">0.07</strong></span>
-              <input id="mutationRateRange" type="range" min="0.01" max="0.22" step="0.005" value="0.07" />
-            </label>
-          </section>
+          <details class="control-section control-dropdown" aria-label="Other simulation controls">
+            <summary class="control-title">Others</summary>
 
-          <section class="control-section" aria-label="Performance metrics">
-            <h2 class="control-title">Performance</h2>
-            <p class="metric-line">FPS: <strong id="fpsValue">0</strong></p>
-            <p class="metric-line">Frame CPU: <strong id="frameCpuValue">0.00</strong> ms</p>
-            <p class="metric-line">Sim CPU: <strong id="simCpuValue">0.00</strong> ms</p>
-            <p class="metric-line">Heatmap CPU: <strong id="heatmapCpuValue">0.00</strong> ms</p>
-            <p class="metric-line">Render CPU: <strong id="renderCpuValue">0.00</strong> ms</p>
-          </section>
+            <details class="control-section control-dropdown control-subgroup" aria-label="Boid motion controls">
+              <summary class="control-title">Boids</summary>
+              <label class="control-group" for="turnAccelRange">
+                <span>Turn Accel: <strong id="turnAccelValue">340</strong> deg/s²</span>
+                <input id="turnAccelRange" type="range" min="120" max="2400" step="20" value="340" />
+              </label>
+              <label class="control-group" for="minSpeedRange">
+                <span>Min Speed: <strong id="minSpeedValue">2.00</strong></span>
+                <input id="minSpeedRange" type="range" min="0" max="4.5" step="0.05" value="2.00" />
+              </label>
+              <label class="control-group" for="maxSpeedRange">
+                <span>Max Speed: <strong id="maxSpeedValue">3.00</strong></span>
+                <input id="maxSpeedRange" type="range" min="0.4" max="4.5" step="0.05" value="3.00" />
+              </label>
+              <label class="control-group" for="perceptionRadiusRange">
+                <span>Perception Radius: <strong id="perceptionRadiusValue">92</strong></span>
+                <input id="perceptionRadiusRange" type="range" min="24" max="220" step="2" value="92" />
+              </label>
+              <label class="control-group" for="separationRadiusRange">
+                <span>Separation Radius: <strong id="separationRadiusValue">18</strong></span>
+                <input id="separationRadiusRange" type="range" min="6" max="80" step="1" value="18" />
+              </label>
+              <label class="control-group" for="alignWeightRange">
+                <span>Align Weight: <strong id="alignWeightValue">0.34</strong></span>
+                <input id="alignWeightRange" type="range" min="0.00" max="2.50" step="0.01" value="0.34" />
+              </label>
+              <label class="control-group" for="cohesionWeightRange">
+                <span>Cohesion Weight: <strong id="cohesionWeightValue">0.07</strong></span>
+                <input id="cohesionWeightRange" type="range" min="0.00" max="2.50" step="0.01" value="0.07" />
+              </label>
+              <label class="control-group" for="separationWeightRange">
+                <span>Separation Weight: <strong id="separationWeightValue">0.52</strong></span>
+                <input id="separationWeightRange" type="range" min="0.00" max="3.50" step="0.01" value="0.52" />
+              </label>
+              <label class="control-group" for="trailWeightRange">
+                <span>Trail Weight: <strong id="trailWeightValue">0.72</strong></span>
+                <input id="trailWeightRange" type="range" min="0.00" max="2.50" step="0.01" value="0.72" />
+              </label>
+            </details>
 
-          <button id="restartButton" type="button">Reseed</button>
+            <details class="control-section control-dropdown control-subgroup" aria-label="Trail source controls">
+              <summary class="control-title">Trail Sources</summary>
+              <p class="fixed-count">Nodes: <strong>1</strong> (drifting)</p>
+              <label class="control-group" for="predatorAttentionRange">
+                <span>Source Strength: <strong id="predatorAttentionValue">0.05</strong></span>
+                <input id="predatorAttentionRange" type="range" min="0.00" max="1.00" step="0.01" value="0.05" />
+              </label>
+            </details>
+
+            <details class="control-section control-dropdown control-subgroup" aria-label="Physarum controls">
+              <summary class="control-title">Physarum</summary>
+              <label class="control-group" for="pherFearWeightRange">
+                <span>Sensor Offset: <strong id="pherFearWeightValue">10.5</strong></span>
+                <input id="pherFearWeightRange" type="range" min="2.0" max="24.0" step="0.5" value="10.5" />
+              </label>
+              <label class="control-group" for="pherDiffusionRange">
+                <span>Trail Diffusion: <strong id="pherDiffusionValue">0.36</strong></span>
+                <input id="pherDiffusionRange" type="range" min="0.02" max="0.95" step="0.01" value="0.36" />
+              </label>
+              <label class="control-group" for="pherDecayRange">
+                <span>Trail Decay: <strong id="pherDecayValue">0.050</strong></span>
+                <input id="pherDecayRange" type="range" min="0.001" max="0.200" step="0.001" value="0.050" />
+              </label>
+              <label class="control-group" for="panicBoostRange">
+                <span>Turn Rate Limit: <strong id="panicBoostValue">170</strong> deg/s</span>
+                <input id="panicBoostRange" type="range" min="40" max="600" step="5" value="170" />
+              </label>
+            </details>
+
+            <details class="control-section control-dropdown control-subgroup" aria-label="Performance metrics">
+              <summary class="control-title">Performance</summary>
+              <p class="metric-line">FPS: <strong id="fpsValue">0</strong></p>
+              <p class="metric-line">Frame CPU: <strong id="frameCpuValue">0.00</strong> ms</p>
+              <p class="metric-line">Sim CPU: <strong id="simCpuValue">0.00</strong> ms</p>
+              <p class="metric-line">Render CPU: <strong id="renderCpuValue">0.00</strong> ms</p>
+            </details>
+          </details>
         </aside>
       </section>
     </main>

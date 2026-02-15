@@ -77,6 +77,37 @@ canvas {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.control-subgroup {
+  margin-top: 0.2rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.control-dropdown {
+  padding-top: 0.35rem;
+}
+
+.control-dropdown > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.control-dropdown > summary::-webkit-details-marker {
+  display: none;
+}
+
+.control-dropdown > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 0.45rem;
+  transform: translateY(-0.02rem);
+  opacity: 0.9;
+}
+
+.control-dropdown[open] > summary::before {
+  content: "▾";
+}
+
 .control-title {
   margin: 0;
   font-size: 0.95rem;

@@ -1,24 +1,30 @@
 const canvas = document.getElementById('boidCanvas');
 const restartButton = document.getElementById('restartButton');
+const boidCountRange = document.getElementById('boidCountRange');
+const boidCountValue = document.getElementById('boidCountValue');
 const turnAccelRange = document.getElementById('turnAccelRange');
 const turnAccelValue = document.getElementById('turnAccelValue');
 const minSpeedRange = document.getElementById('minSpeedRange');
 const minSpeedValue = document.getElementById('minSpeedValue');
+const maxSpeedRange = document.getElementById('maxSpeedRange');
+const maxSpeedValue = document.getElementById('maxSpeedValue');
+const perceptionRadiusRange = document.getElementById('perceptionRadiusRange');
+const perceptionRadiusValue = document.getElementById('perceptionRadiusValue');
+const separationRadiusRange = document.getElementById('separationRadiusRange');
+const separationRadiusValue = document.getElementById('separationRadiusValue');
+const alignWeightRange = document.getElementById('alignWeightRange');
+const alignWeightValue = document.getElementById('alignWeightValue');
+const cohesionWeightRange = document.getElementById('cohesionWeightRange');
+const cohesionWeightValue = document.getElementById('cohesionWeightValue');
+const separationWeightRange = document.getElementById('separationWeightRange');
+const separationWeightValue = document.getElementById('separationWeightValue');
+const trailWeightRange = document.getElementById('trailWeightRange');
+const trailWeightValue = document.getElementById('trailWeightValue');
+const boundaryModeToggle = document.getElementById('boundaryModeToggle');
+const boundaryModeValue = document.getElementById('boundaryModeValue');
 const predatorAttentionRange = document.getElementById('predatorAttentionRange');
 const predatorAttentionValue = document.getElementById('predatorAttentionValue');
 const viewToggleButton = document.getElementById('viewToggleButton');
-const heatmapSpacingRange = document.getElementById('heatmapSpacingRange');
-const heatmapSpacingValue = document.getElementById('heatmapSpacingValue');
-const heatmapDotRadiusRange = document.getElementById('heatmapDotRadiusRange');
-const heatmapDotRadiusValue = document.getElementById('heatmapDotRadiusValue');
-const heatmapDiffuseRange = document.getElementById('heatmapDiffuseRange');
-const heatmapDiffuseValue = document.getElementById('heatmapDiffuseValue');
-const heatmapSamplesRange = document.getElementById('heatmapSamplesRange');
-const heatmapSamplesValue = document.getElementById('heatmapSamplesValue');
-const heatmapTrendGainRange = document.getElementById('heatmapTrendGainRange');
-const heatmapTrendGainValue = document.getElementById('heatmapTrendGainValue');
-const heatmapTrendDeadbandRange = document.getElementById('heatmapTrendDeadbandRange');
-const heatmapTrendDeadbandValue = document.getElementById('heatmapTrendDeadbandValue');
 const pherTrailWeightRange = document.getElementById('pherTrailWeightRange');
 const pherTrailWeightValue = document.getElementById('pherTrailWeightValue');
 const pherFearWeightRange = document.getElementById('pherFearWeightRange');
@@ -29,28 +35,36 @@ const pherDecayRange = document.getElementById('pherDecayRange');
 const pherDecayValue = document.getElementById('pherDecayValue');
 const panicBoostRange = document.getElementById('panicBoostRange');
 const panicBoostValue = document.getElementById('panicBoostValue');
-const metabolismRange = document.getElementById('metabolismRange');
-const metabolismValue = document.getElementById('metabolismValue');
-const boidSprintBoostRange = document.getElementById('boidSprintBoostRange');
-const boidSprintBoostValue = document.getElementById('boidSprintBoostValue');
-const predatorSprintBoostRange = document.getElementById('predatorSprintBoostRange');
-const predatorSprintBoostValue = document.getElementById('predatorSprintBoostValue');
-const confusionStrengthRange = document.getElementById('confusionStrengthRange');
-const confusionStrengthValue = document.getElementById('confusionStrengthValue');
-const mutationRateRange = document.getElementById('mutationRateRange');
-const mutationRateValue = document.getElementById('mutationRateValue');
 const fpsValue = document.getElementById('fpsValue');
 const frameCpuValue = document.getElementById('frameCpuValue');
 const simCpuValue = document.getElementById('simCpuValue');
-const heatmapCpuValue = document.getElementById('heatmapCpuValue');
 const renderCpuValue = document.getElementById('renderCpuValue');
 
 const FIXED_STEP = 1 / 60;
-const BOID_COUNT = 30000;
-const PREDATOR_COUNT = 1;
+const BOID_COUNT_DEFAULT = 100000;
+const BOID_COUNT_MIN = 100;
+const BOID_COUNT_MAX = 1000000;
+const BOID_COUNT_STEPS = (() => {
+  const values = [];
+  const multipliers = [1, 2, 3, 5];
+  for (let exponent = 0; exponent <= 6; exponent += 1) {
+    const base = 10 ** exponent;
+    for (const multiplier of multipliers) {
+      const candidate = base * multiplier;
+      if (candidate < BOID_COUNT_MIN || candidate > BOID_COUNT_MAX) {
+        continue;
+      }
+      values.push(candidate);
+    }
+  }
+  return values;
+})();
+const BOID_CAPACITY = BOID_COUNT_MAX;
+const PREDATOR_COUNT = 0;
+const PREDATOR_BUFFER_COUNT = 1;
 const BOID_WORKGROUP_SIZE = 128;
 const CATCH_CLEAR_WORKGROUP_SIZE = 32;
-const HEATMAP_WORKGROUP_SIZE = 128;
+const FIELD_WORKGROUP_SIZE = 128;
 const GRID_WORKGROUP_SIZE = 128;
 const BOID_FLOATS = 12;
 const PREDATOR_FLOATS = 12;
@@ -58,13 +72,13 @@ const PHEROMONE_FLOATS = 4;
 const GRID_CELL_SIZE = 72;
 const GRID_MAX_CELLS = 2048;
 const GRID_CELL_CAPACITY = 256;
-const HEATMAP_DOT_SPACING = 8;
-const HEATMAP_DOT_RADIUS = 3.5;
-const HEATMAP_DIFFUSE_RADIUS = 22;
-const HEATMAP_SAMPLE_BUDGET = 320;
-const HEATMAP_TREND_GAIN = 4.2;
-const HEATMAP_TREND_DEADBAND = 0.045;
-const HEATMAP_MAX_POINTS = 65536;
+const FIELD_DOT_SPACING = 8;
+const FIELD_DOT_RADIUS = 3.5;
+const FIELD_DIFFUSE_RADIUS = 22;
+const FIELD_SAMPLE_BUDGET = 320;
+const FIELD_TREND_GAIN = 4.2;
+const FIELD_TREND_DEADBAND = 0.045;
+const FIELD_MAX_POINTS = 65536;
 const SIM_COUNTER_COUNT = 2;
 const BOID_STATS_SAMPLE_COUNT = 512;
 const ECOLOGY_READBACK_INTERVAL_MS = 260;
@@ -73,61 +87,51 @@ const PHYS_SENSOR_OFFSET = 10.5;
 const PHYS_SENSOR_WIDTH = 1;
 const PHYS_ROTATE_ANGLE = (26 * Math.PI) / 180;
 const PHYS_STEP_SIZE = 1;
-const PHYS_DEPOSIT = 0.65;
+const PHYS_DEPOSIT = 0.12;
 const PHYS_DIFFUSE_MIX = 0.36;
 const PHYS_DECAY = 0.05;
 const PHYS_MODE_REPEL = 0;
-const PHYS_NODE_SOURCE_STRENGTH = 0.08;
+const PHYS_NODE_SOURCE_STRENGTH = 0.05;
+const BOID_TRAIL_WEIGHT = 0.72;
+let boidCount = BOID_COUNT_STEPS.includes(BOID_COUNT_DEFAULT) ? BOID_COUNT_DEFAULT : BOID_COUNT_STEPS[0];
 
 const config = {
-  perceptionRadius: 92,
-  separationRadius: 18,
-  maxSpeed: 1.7,
+  perceptionRadius: Number(perceptionRadiusRange?.value || 92),
+  separationRadius: Number(separationRadiusRange?.value || 18),
+  maxSpeed: Number(maxSpeedRange?.value || 3.0),
   minSpeed: Number(minSpeedRange.value),
   maxForce: 0.04,
   maxTurnRate: (Number(panicBoostRange?.value || 145) * Math.PI) / 180,
   maxTurnAcceleration: (Number(turnAccelRange.value) * Math.PI) / 180,
-  alignWeight: 0.34,
-  cohesionWeight: 0.07,
-  separationWeight: 0.52,
-  predatorAvoidWeight: 2.95,
+  alignWeight: Number(alignWeightRange?.value || 0.34),
+  cohesionWeight: Number(cohesionWeightRange?.value || 0.07),
+  separationWeight: Number(separationWeightRange?.value || 0.52),
+  trailWeight: Number(trailWeightRange?.value || BOID_TRAIL_WEIGHT),
+  predatorAvoidWeight: 0,
   predatorCatchRadius: 9,
   predatorAvoidRadius: 132,
-  predatorFearStrength: 0.18,
+  predatorFearStrength: 0,
   predatorFearRadius: 72,
   predatorSeparationRadius: 50,
   predatorSeparationWeight: 1.8,
   predatorTurnRateFactor: 0.78,
   predatorTurnAccelerationFactor: 0.72,
-  predatorSpeedFactor: 0.9,
-  predatorAttentionSeconds: Number(predatorAttentionRange.value),
-  heatmapDotSpacingPx: Number(heatmapSpacingRange?.value || HEATMAP_DOT_SPACING),
-  heatmapDotRadiusPx: Number(heatmapDotRadiusRange?.value || HEATMAP_DOT_RADIUS),
-  heatmapDiffuseRadiusPx: Number(heatmapDiffuseRange?.value || HEATMAP_DIFFUSE_RADIUS),
-  heatmapSampleBudget: Number(heatmapSamplesRange?.value || HEATMAP_SAMPLE_BUDGET),
-  heatmapTrendGain: Number(heatmapTrendGainRange?.value || HEATMAP_TREND_GAIN),
-  heatmapTrendDeadband: Number(heatmapTrendDeadbandRange?.value || HEATMAP_TREND_DEADBAND),
-  pherTrailWeight: Number(pherTrailWeightRange?.value || 0.6),
-  pherFearWeight: Number(pherFearWeightRange?.value || 1.5),
-  pherDiffusion: Number(pherDiffusionRange?.value || 0.28),
-  pherDecay: Number(pherDecayRange?.value || 0.3),
-  panicBoost: Number(panicBoostRange?.value || 1.2),
-  metabolismIntensity: Number(metabolismRange?.value || 1.0),
-  boidSprintBoost: Number(boidSprintBoostRange?.value || 0.9),
-  predatorSprintBoost: Number(predatorSprintBoostRange?.value || 0.2),
-  confusionStrength: Number(confusionStrengthRange?.value || 0.62),
-  mutationRate: Number(mutationRateRange?.value || 0.07),
+  predatorSpeedFactor: 0,
+  predatorAttentionSeconds: 0,
+  predatorSprintBoost: 0,
   physSensorAngle: PHYS_SENSOR_ANGLE,
   physSensorOffset: Number(pherFearWeightRange?.value || 10.5),
   physSensorWidth: PHYS_SENSOR_WIDTH,
   physRotateAngle: PHYS_ROTATE_ANGLE,
   physStepSize: PHYS_STEP_SIZE,
-  physDeposit: Number(pherTrailWeightRange?.value || 0.65),
+  physDeposit: Number(pherTrailWeightRange?.value || PHYS_DEPOSIT),
   physDiffuseMix: Number(pherDiffusionRange?.value || 0.36),
   physDecay: Number(pherDecayRange?.value || 0.05),
   physModeRepel: PHYS_MODE_REPEL,
-  physNodeSourceStrength: Number(predatorAttentionRange?.value || 0.08),
+  physNodeSourceStrength: Number(predatorAttentionRange?.value || PHYS_NODE_SOURCE_STRENGTH),
+  boundaryWrap: true,
 };
+config.minSpeed = Math.min(config.minSpeed, config.maxSpeed);
 
 let worldWidth = 960;
 let worldHeight = 560;
@@ -137,27 +141,25 @@ let accumulator = 0;
 let lastFrameTime = 0;
 let currentBoidBufferIndex = 0;
 let renderMode = 'boids';
-let heatmapPointCount = 1;
-let currentHeatmapBufferIndex = 0;
+let samplePointCount = 1;
 let currentPheromoneBufferIndex = 0;
 let gpu = null;
 let gpuRuntimeError = false;
 let lastTextState = JSON.stringify({
   mode: 'initializing',
-  boidCount: BOID_COUNT,
+  boidCount,
   predatorCount: PREDATOR_COUNT,
 });
 const perfStats = {
   fps: 0,
   frameCpuMs: 0,
   simCpuMs: 0,
-  heatmapCpuMs: 0,
   renderCpuMs: 0,
   alpha: 0.15,
   lastPanelUpdate: 0,
 };
 const ecologyStats = {
-  avgSpeed: Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25)),
+  avgSpeed: Math.max(0.2, Math.min(config.maxSpeed, config.minSpeed)),
   avgPredatorSpeed: 0,
   boidsNearPredatorsFraction: 0,
   movedFraction: 0,
@@ -194,8 +196,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -211,7 +213,7 @@ struct SimParams {
 @group(0) @binding(8) var<storage, read_write> simCounters: array<atomic<u32>>;
 
 const TAU: f32 = 6.28318530718;
-const PHEROMONE_MAX_POINTS: u32 = ${HEATMAP_MAX_POINTS}u;
+const PHEROMONE_MAX_POINTS: u32 = ${FIELD_MAX_POINTS}u;
 const GRID_CELL_SIZE: f32 = ${GRID_CELL_SIZE.toFixed(1)};
 const GRID_MAX_CELLS: u32 = ${GRID_MAX_CELLS}u;
 const GRID_CELL_CAPACITY: u32 = ${GRID_CELL_CAPACITY}u;
@@ -219,18 +221,57 @@ const MAX_CELL_SCAN: u32 = 24u;
 const COUNTER_MOVED: u32 = 0u;
 const COUNTER_BLOCKED: u32 = 1u;
 
+fn wrap_coordinate(value: f32, size: f32) -> f32 {
+  var result = value;
+  if (result < 0.0) {
+    result = result + size;
+  }
+  if (result >= size) {
+    result = result - size;
+  }
+  return result;
+}
+
 fn clamp_coordinate(value: f32, size: f32) -> f32 {
   return clamp(value, 0.0, max(size - 0.001, 0.0));
 }
 
-fn read_pheromone_sample(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec4f {
+fn wrapped_delta(srcValue: f32, dstValue: f32, size: f32) -> f32 {
+  var delta = dstValue - srcValue;
+  let half = size * 0.5;
+  if (delta > half) {
+    delta = delta - size;
+  } else if (delta < -half) {
+    delta = delta + size;
+  }
+  return delta;
+}
+
+fn wrap_index(value: i32, size: i32) -> u32 {
+  var v = value % size;
+  if (v < 0) {
+    v = v + size;
+  }
+  return u32(v);
+}
+
+fn read_pheromone_sample(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32, wrapMode: bool) -> vec4f {
   if (cols == 0u || rows == 0u || sampleCount == 0u) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
-  if (x < 0 || y < 0 || x >= i32(cols) || y >= i32(rows)) {
-    return vec4f(0.0, 0.0, 0.0, 0.0);
+  var sx: u32 = 0u;
+  var sy: u32 = 0u;
+  if (wrapMode) {
+    sx = wrap_index(x, i32(cols));
+    sy = wrap_index(y, i32(rows));
+  } else {
+    if (x < 0 || y < 0 || x >= i32(cols) || y >= i32(rows)) {
+      return vec4f(0.0, 0.0, 0.0, 0.0);
+    }
+    sx = u32(x);
+    sy = u32(y);
   }
-  let idx = u32(y) * cols + u32(x);
+  let idx = sy * cols + sx;
   if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
@@ -290,6 +331,7 @@ fn sensor_mean_component(
   sampleCount: u32,
   spacing: f32,
   component: u32,
+  wrapMode: bool,
 ) -> f32 {
   if (sampleCount == 0u || spacing <= 0.0) {
     return 0.0;
@@ -300,7 +342,7 @@ fn sensor_mean_component(
   var count = 0.0;
   for (var oy: i32 = -radius; oy <= radius; oy = oy + 1) {
     for (var ox: i32 = -radius; ox <= radius; ox = ox + 1) {
-      let sample = read_pheromone_sample(baseX + ox, baseY + oy, cols, rows, sampleCount);
+      let sample = read_pheromone_sample(baseX + ox, baseY + oy, cols, rows, sampleCount, wrapMode);
       var sampleValue = sample.x;
       if (component == 1u) {
         sampleValue = sample.y;
@@ -328,9 +370,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let worldH = params.world.y;
   let dt = max(params.world.z, 0.0001);
   let frameScale = params.world.w;
+  let wrapMode = params.lifeB.w > 0.5;
 
   let predatorCount = u32(params.counts.y);
-  let pherSpacing = max(params.heatmapA.x, 0.75);
+  let pherSpacing = max(params.fieldA.x, 0.75);
   let pherCols = max(1u, u32(floor(worldW / pherSpacing)));
   let pherRows = max(1u, u32(floor(worldH / pherSpacing)));
   let pherCount = min(PHEROMONE_MAX_POINTS, pherCols * pherRows);
@@ -369,8 +412,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var predatorAvoidCount = 0u;
   for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
     let pred = predators[p];
-    let dx = pred.posVel.x - mePos.x;
-    let dy = pred.posVel.y - mePos.y;
+    let dx = select(pred.posVel.x - mePos.x, wrapped_delta(mePos.x, pred.posVel.x, worldW), wrapMode);
+    let dy = select(pred.posVel.y - mePos.y, wrapped_delta(mePos.y, pred.posVel.y, worldH), wrapMode);
     let delta = vec2f(dx, dy);
     let distSq = dot(delta, delta);
     if (distSq <= 0.0001 || distSq > predatorAvoidRadiusSq) {
@@ -395,16 +438,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var alignmentSum = vec2f(0.0, 0.0);
   for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
     let nyi = i32(cy) + oy;
-    if (nyi < 0 || nyi >= i32(gridRows)) {
+    if (!wrapMode && (nyi < 0 || nyi >= i32(gridRows))) {
       continue;
     }
-    let ny = u32(nyi);
+    let ny = select(u32(nyi), wrap_index(nyi, i32(gridRows)), wrapMode);
     for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
       let nxi = i32(cx) + ox;
-      if (nxi < 0 || nxi >= i32(gridCols)) {
+      if (!wrapMode && (nxi < 0 || nxi >= i32(gridCols))) {
         continue;
       }
-      let nx = u32(nxi);
+      let nx = select(u32(nxi), wrap_index(nxi, i32(gridCols)), wrapMode);
       let rawCellIndex = ny * gridCols + nx;
       if (rawCellIndex >= gridCount) {
         continue;
@@ -417,8 +460,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           continue;
         }
         let other = boidsIn[neighborIndex];
-        let dx = other.posVel.x - mePos.x;
-        let dy = other.posVel.y - mePos.y;
+        let dx = select(other.posVel.x - mePos.x, wrapped_delta(mePos.x, other.posVel.x, worldW), wrapMode);
+        let dy = select(other.posVel.y - mePos.y, wrapped_delta(mePos.y, other.posVel.y, worldH), wrapMode);
         let delta = vec2f(dx, dy);
         let distSq = dot(delta, delta);
         if (distSq <= 0.0001 || distSq > perceptionRadiusSq) {
@@ -454,32 +497,32 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let dirL = vec2f(cos(heading + sensorAngle), sin(heading + sensorAngle));
   let dirR = vec2f(cos(heading - sensorAngle), sin(heading - sensorAngle));
   let sensorPosF = vec2f(
-    clamp_coordinate(mePos.x + dirF.x * sensorOffset, worldW),
-    clamp_coordinate(mePos.y + dirF.y * sensorOffset, worldH),
+    select(clamp_coordinate(mePos.x + dirF.x * sensorOffset, worldW), wrap_coordinate(mePos.x + dirF.x * sensorOffset, worldW), wrapMode),
+    select(clamp_coordinate(mePos.y + dirF.y * sensorOffset, worldH), wrap_coordinate(mePos.y + dirF.y * sensorOffset, worldH), wrapMode),
   );
   let sensorPosL = vec2f(
-    clamp_coordinate(mePos.x + dirL.x * sensorOffset, worldW),
-    clamp_coordinate(mePos.y + dirL.y * sensorOffset, worldH),
+    select(clamp_coordinate(mePos.x + dirL.x * sensorOffset, worldW), wrap_coordinate(mePos.x + dirL.x * sensorOffset, worldW), wrapMode),
+    select(clamp_coordinate(mePos.y + dirL.y * sensorOffset, worldH), wrap_coordinate(mePos.y + dirL.y * sensorOffset, worldH), wrapMode),
   );
   let sensorPosR = vec2f(
-    clamp_coordinate(mePos.x + dirR.x * sensorOffset, worldW),
-    clamp_coordinate(mePos.y + dirR.y * sensorOffset, worldH),
+    select(clamp_coordinate(mePos.x + dirR.x * sensorOffset, worldW), wrap_coordinate(mePos.x + dirR.x * sensorOffset, worldW), wrapMode),
+    select(clamp_coordinate(mePos.y + dirR.y * sensorOffset, worldH), wrap_coordinate(mePos.y + dirR.y * sensorOffset, worldH), wrapMode),
   );
-  let F = sensor_mean_component(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u);
-  let FL = sensor_mean_component(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u);
-  let FR = sensor_mean_component(sensorPosR, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u);
-  let fearF = sensor_mean_component(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u);
-  let fearL = sensor_mean_component(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u);
-  let fearR = sensor_mean_component(sensorPosR, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u);
+  let F = sensor_mean_component(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u, wrapMode);
+  let FL = sensor_mean_component(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u, wrapMode);
+  let FR = sensor_mean_component(sensorPosR, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 0u, wrapMode);
+  let fearF = sensor_mean_component(sensorPosF, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u, wrapMode);
+  let fearL = sensor_mean_component(sensorPosL, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u, wrapMode);
+  let fearR = sensor_mean_component(sensorPosR, sensorRadius, pherCols, pherRows, pherCount, pherSpacing, 1u, wrapMode);
   let fearVec = safe_normalize(dirF * fearF + dirL * fearL + dirR * fearR);
   let fearLevel = max(0.0, (fearF + fearL + fearR) * 0.33333334);
   let fearThreat = clamp(fearLevel * 1.8, 0.0, 1.0);
   let meCellX = i32(floor(mePos.x / pherSpacing));
   let meCellY = i32(floor(mePos.y / pherSpacing));
-  let trailLeft = read_pheromone_sample(meCellX - 1, meCellY, pherCols, pherRows, pherCount).x;
-  let trailRight = read_pheromone_sample(meCellX + 1, meCellY, pherCols, pherRows, pherCount).x;
-  let trailUp = read_pheromone_sample(meCellX, meCellY - 1, pherCols, pherRows, pherCount).x;
-  let trailDown = read_pheromone_sample(meCellX, meCellY + 1, pherCols, pherRows, pherCount).x;
+  let trailLeft = read_pheromone_sample(meCellX - 1, meCellY, pherCols, pherRows, pherCount, wrapMode).x;
+  let trailRight = read_pheromone_sample(meCellX + 1, meCellY, pherCols, pherRows, pherCount, wrapMode).x;
+  let trailUp = read_pheromone_sample(meCellX, meCellY - 1, pherCols, pherRows, pherCount, wrapMode).x;
+  let trailDown = read_pheromone_sample(meCellX, meCellY + 1, pherCols, pherRows, pherCount, wrapMode).x;
   let antiTrailGradient = safe_normalize(vec2f(trailLeft - trailRight, trailUp - trailDown));
   let trailVec = safe_normalize(dirF * F + dirL * FL + dirR * FR);
   let trailLevel = max(0.0, (F + FL + FR) * 0.33333334);
@@ -495,18 +538,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let jitterVec = vec2f(cos(heading + jitterAngle), sin(heading + jitterAngle));
   let threat = max(predatorThreat, fearThreat * 0.92);
   let trailInfluence = trailWeight / (1.0 + trailLevel * 0.7) * (1.0 - 0.84 * threat);
-  let wallMargin = max(20.0, min(worldW, worldH) * 0.08);
-  var wallAvoid = vec2f(0.0, 0.0);
-  if (mePos.x < wallMargin) {
-    wallAvoid.x = wallAvoid.x + (1.0 - mePos.x / wallMargin);
-  } else if (mePos.x > worldW - wallMargin) {
-    wallAvoid.x = wallAvoid.x - (1.0 - (worldW - mePos.x) / wallMargin);
-  }
-  if (mePos.y < wallMargin) {
-    wallAvoid.y = wallAvoid.y + (1.0 - mePos.y / wallMargin);
-  } else if (mePos.y > worldH - wallMargin) {
-    wallAvoid.y = wallAvoid.y - (1.0 - (worldH - mePos.y) / wallMargin);
-  }
 
   var desiredDir = forward * 0.28;
   desiredDir = desiredDir + alignmentVec * alignmentWeight;
@@ -520,7 +551,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   desiredDir = desiredDir + lateral * sideImbalance * congestion * 0.35;
   desiredDir = desiredDir + forward * trailSaturation * 0.14;
   desiredDir = desiredDir + jitterVec * (0.04 + lowTrail * 0.14 + 0.08 * threat);
-  desiredDir = desiredDir + wallAvoid * (0.9 + 0.7 * threat);
   if (length(desiredDir) <= 0.00001) {
     desiredDir = forward;
   }
@@ -540,27 +570,40 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let crowdFactor = clamp(f32(closeCount) / 6.0, 0.0, 1.0);
   let nextSpeed = cruiseSpeed * mix(1.0, 0.78, crowdFactor) * mix(1.0, 1.22, threat);
   let moveDir = vec2f(cos(nextHeading), sin(nextHeading));
-  var nextVel = moveDir * nextSpeed;
-  var nextPos = mePos + nextVel * frameScale;
-  var boundedHeading = nextHeading;
-  var boundedTurnRate = nextTurnRate;
-  if (nextPos.x <= 0.0 || nextPos.x >= worldW) {
-    nextVel.x = -nextVel.x;
-    boundedHeading = atan2(nextVel.y, nextVel.x);
-    boundedTurnRate = 0.0;
+  let nextVel = moveDir * nextSpeed;
+  var finalPos = vec2f(0.0, 0.0);
+  var finalVel = nextVel;
+  var finalHeading = nextHeading;
+  var finalTurnRate = nextTurnRate;
+  if (wrapMode) {
+    finalPos = vec2f(
+      wrap_coordinate(mePos.x + nextVel.x * frameScale, worldW),
+      wrap_coordinate(mePos.y + nextVel.y * frameScale, worldH),
+    );
+  } else {
+    var boundedPos = mePos + nextVel * frameScale;
+    var bounced = false;
+    if (boundedPos.x <= 0.0 || boundedPos.x >= worldW) {
+      finalVel.x = -finalVel.x;
+      bounced = true;
+    }
+    if (boundedPos.y <= 0.0 || boundedPos.y >= worldH) {
+      finalVel.y = -finalVel.y;
+      bounced = true;
+    }
+    boundedPos = vec2f(
+      clamp_coordinate(boundedPos.x, worldW),
+      clamp_coordinate(boundedPos.y, worldH),
+    );
+    finalPos = boundedPos;
+    if (bounced) {
+      finalHeading = atan2(finalVel.y, finalVel.x);
+      finalTurnRate = 0.0;
+    }
   }
-  if (nextPos.y <= 0.0 || nextPos.y >= worldH) {
-    nextVel.y = -nextVel.y;
-    boundedHeading = atan2(nextVel.y, nextVel.x);
-    boundedTurnRate = 0.0;
-  }
-  nextPos = vec2f(
-    clamp_coordinate(nextPos.x, worldW),
-    clamp_coordinate(nextPos.y, worldH),
-  );
 
-  let targetCellX = min(pherCols - 1u, u32(floor(nextPos.x / pherSpacing)));
-  let targetCellY = min(pherRows - 1u, u32(floor(nextPos.y / pherSpacing)));
+  let targetCellX = min(pherCols - 1u, u32(floor(finalPos.x / pherSpacing)));
+  let targetCellY = min(pherRows - 1u, u32(floor(finalPos.y / pherSpacing)));
   let targetIndex = targetCellY * pherCols + targetCellX;
   if (targetIndex < pherCount) {
     atomicAdd(&occupancyClaims[targetIndex], 1u);
@@ -572,8 +615,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   }
 
   boidsOut[index] = BoidState(
-    vec4f(nextPos, nextVel),
-    vec4f(boundedHeading, 1.0, 1.0 - crowdFactor * 0.5, boundedTurnRate),
+    vec4f(finalPos, finalVel),
+    vec4f(finalHeading, 1.0, 1.0 - crowdFactor * 0.5, finalTurnRate),
     me.bio,
   );
 }
@@ -600,8 +643,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -612,8 +655,30 @@ struct SimParams {
 
 const MAX_PREDATORS: u32 = 16u;
 
+fn wrap_coordinate(value: f32, size: f32) -> f32 {
+  var result = value;
+  if (result < 0.0) {
+    result = result + size;
+  }
+  if (result >= size) {
+    result = result - size;
+  }
+  return result;
+}
+
 fn clamp_coordinate(value: f32, size: f32) -> f32 {
   return clamp(value, 0.0, max(size - 0.001, 0.0));
+}
+
+fn wrapped_delta(srcValue: f32, dstValue: f32, size: f32) -> f32 {
+  var delta = dstValue - srcValue;
+  let half = size * 0.5;
+  if (delta > half) {
+    delta = delta - size;
+  } else if (delta < -half) {
+    delta = delta + size;
+  }
+  return delta;
 }
 
 const TAU: f32 = 6.28318530718;
@@ -643,6 +708,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let worldH = params.world.y;
   let dt = params.world.z;
   let frameScale = params.world.w;
+  let wrapMode = params.lifeB.w > 0.5;
 
   let boidCount = u32(params.counts.x);
   let predatorCount = u32(params.counts.y);
@@ -682,8 +748,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           select(1.18, 0.82, prefersForager),
           isApex,
         );
-        let dx = boid.posVel.x - pred.posVel.x;
-        let dy = boid.posVel.y - pred.posVel.y;
+        let dx = select(boid.posVel.x - pred.posVel.x, wrapped_delta(pred.posVel.x, boid.posVel.x, worldW), wrapMode);
+        let dy = select(boid.posVel.y - pred.posVel.y, wrapped_delta(pred.posVel.y, boid.posVel.y, worldH), wrapMode);
         let distSq = dx * dx + dy * dy;
         let weighted = distSq / max(preference, 0.2);
         if (weighted < bestDistSq) {
@@ -699,8 +765,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var targetDistance = 1e9;
     if (targetIndex >= 0 && targetIndex < i32(boidCount)) {
       let prey = boidsIn[u32(targetIndex)];
-      let tx = prey.posVel.x - pred.posVel.x;
-      let ty = prey.posVel.y - pred.posVel.y;
+      let tx = select(prey.posVel.x - pred.posVel.x, wrapped_delta(pred.posVel.x, prey.posVel.x, worldW), wrapMode);
+      let ty = select(prey.posVel.y - pred.posVel.y, wrapped_delta(pred.posVel.y, prey.posVel.y, worldH), wrapMode);
       let toPrey = vec2f(tx, ty);
       let tLen = length(toPrey);
       targetDistance = tLen;
@@ -722,8 +788,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         continue;
       }
       let other = snapshot[q];
-      let dx = other.posVel.x - pred.posVel.x;
-      let dy = other.posVel.y - pred.posVel.y;
+      let dx = select(other.posVel.x - pred.posVel.x, wrapped_delta(pred.posVel.x, other.posVel.x, worldW), wrapMode);
+      let dy = select(other.posVel.y - pred.posVel.y, wrapped_delta(pred.posVel.y, other.posVel.y, worldH), wrapMode);
       let distSq = dx * dx + dy * dy;
       if (distSq <= 0.0 || distSq > predatorSeparationRadiusSq) {
         continue;
@@ -737,20 +803,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       separate = separate / f32(separateCount);
     }
 
-    let wallMargin = max(20.0, min(worldW, worldH) * 0.09);
-    var wallAvoid = vec2f(0.0, 0.0);
-    if (pred.posVel.x < wallMargin) {
-      wallAvoid.x = wallAvoid.x + (1.0 - pred.posVel.x / wallMargin);
-    } else if (pred.posVel.x > worldW - wallMargin) {
-      wallAvoid.x = wallAvoid.x - (1.0 - (worldW - pred.posVel.x) / wallMargin);
-    }
-    if (pred.posVel.y < wallMargin) {
-      wallAvoid.y = wallAvoid.y + (1.0 - pred.posVel.y / wallMargin);
-    } else if (pred.posVel.y > worldH - wallMargin) {
-      wallAvoid.y = wallAvoid.y - (1.0 - (worldH - pred.posVel.y) / wallMargin);
-    }
-
-    var desiredDir = chaseDir + separate * predatorSeparationWeight + wallAvoid * 0.95;
+    var desiredDir = chaseDir + separate * predatorSeparationWeight;
     var desiredHeading = pred.headingTimers.x;
     if (length(desiredDir) > 0.0001) {
       desiredHeading = atan2(desiredDir.y, desiredDir.x);
@@ -791,23 +844,35 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     pred.aux.w = nextTurnRate;
 
     var nextVel = vec2f(cos(nextHeading), sin(nextHeading)) * predatorSpeed;
-    var nextPos = pred.posVel.xy + nextVel * frameScale;
+    var nextPos = vec2f(0.0, 0.0);
     var boundedHeading = nextHeading;
     var boundedTurnRate = nextTurnRate;
-    if (nextPos.x <= 0.0 || nextPos.x >= worldW) {
-      nextVel.x = -nextVel.x;
-      boundedHeading = atan2(nextVel.y, nextVel.x);
-      boundedTurnRate = 0.0;
+    if (wrapMode) {
+      nextPos = vec2f(
+        wrap_coordinate(pred.posVel.x + nextVel.x * frameScale, worldW),
+        wrap_coordinate(pred.posVel.y + nextVel.y * frameScale, worldH),
+      );
+    } else {
+      var rawPos = pred.posVel.xy + nextVel * frameScale;
+      var bounced = false;
+      if (rawPos.x <= 0.0 || rawPos.x >= worldW) {
+        nextVel.x = -nextVel.x;
+        bounced = true;
+      }
+      if (rawPos.y <= 0.0 || rawPos.y >= worldH) {
+        nextVel.y = -nextVel.y;
+        bounced = true;
+      }
+      rawPos = vec2f(
+        clamp_coordinate(rawPos.x, worldW),
+        clamp_coordinate(rawPos.y, worldH),
+      );
+      nextPos = rawPos;
+      if (bounced) {
+        boundedHeading = atan2(nextVel.y, nextVel.x);
+        boundedTurnRate = 0.0;
+      }
     }
-    if (nextPos.y <= 0.0 || nextPos.y >= worldH) {
-      nextVel.y = -nextVel.y;
-      boundedHeading = atan2(nextVel.y, nextVel.x);
-      boundedTurnRate = 0.0;
-    }
-    nextPos = vec2f(
-      clamp_coordinate(nextPos.x, worldW),
-      clamp_coordinate(nextPos.y, worldH),
-    );
     pred.posVel.x = nextPos.x;
     pred.posVel.y = nextPos.y;
     pred.posVel.z = nextVel.x;
@@ -842,8 +907,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -851,10 +916,10 @@ struct SimParams {
 @group(0) @binding(0) var<storage, read_write> occupancyClaims: array<atomic<u32>>;
 @group(0) @binding(1) var<uniform> params: SimParams;
 
-@compute @workgroup_size(${HEATMAP_WORKGROUP_SIZE})
+@compute @workgroup_size(${FIELD_WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let sampleCount = u32(params.counts.w);
-  if (gid.x >= sampleCount || gid.x >= ${HEATMAP_MAX_POINTS}u) {
+  if (gid.x >= sampleCount || gid.x >= ${FIELD_MAX_POINTS}u) {
     return;
   }
   atomicStore(&occupancyClaims[gid.x], 0u);
@@ -876,8 +941,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -939,8 +1004,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -951,11 +1016,20 @@ struct SimParams {
 @group(0) @binding(4) var<uniform> params: SimParams;
 @group(0) @binding(5) var<storage, read_write> occupancyClaims: array<atomic<u32>>;
 
-const PHEROMONE_MAX_POINTS: u32 = ${HEATMAP_MAX_POINTS}u;
+const PHEROMONE_MAX_POINTS: u32 = ${FIELD_MAX_POINTS}u;
 const TAU: f32 = 6.28318530718;
 
-fn bounded_abs_delta(a: f32, b: f32) -> f32 {
-  return abs(a - b);
+fn axis_abs_delta(a: f32, b: f32, size: f32, wrapMode: bool) -> f32 {
+  let raw = abs(a - b);
+  return select(raw, min(raw, size - raw), wrapMode);
+}
+
+fn wrap_index(value: i32, size: i32) -> u32 {
+  var v = value % size;
+  if (v < 0) {
+    v = v + size;
+  }
+  return u32(v);
 }
 
 fn hash_u32(x: u32) -> u32 {
@@ -968,21 +1042,30 @@ fn hash_u32(x: u32) -> u32 {
   return v;
 }
 
-fn read_pheromone(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32) -> vec4f {
+fn read_pheromone(x: i32, y: i32, cols: u32, rows: u32, sampleCount: u32, wrapMode: bool) -> vec4f {
   if (sampleCount == 0u || cols == 0u || rows == 0u) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
-  if (x < 0 || y < 0 || x >= i32(cols) || y >= i32(rows)) {
-    return vec4f(0.0, 0.0, 0.0, 0.0);
+  var sx: u32 = 0u;
+  var sy: u32 = 0u;
+  if (wrapMode) {
+    sx = wrap_index(x, i32(cols));
+    sy = wrap_index(y, i32(rows));
+  } else {
+    if (x < 0 || y < 0 || x >= i32(cols) || y >= i32(rows)) {
+      return vec4f(0.0, 0.0, 0.0, 0.0);
+    }
+    sx = u32(x);
+    sy = u32(y);
   }
-  let idx = u32(y) * cols + u32(x);
+  let idx = sy * cols + sx;
   if (idx >= sampleCount || idx >= PHEROMONE_MAX_POINTS) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
   return pheromonePrev[idx].values;
 }
 
-@compute @workgroup_size(${HEATMAP_WORKGROUP_SIZE})
+@compute @workgroup_size(${FIELD_WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let idx = gid.x;
   let sampleCount = u32(params.counts.w);
@@ -992,13 +1075,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   let worldW = params.world.x;
   let worldH = params.world.y;
-  let spacing = max(params.heatmapA.x, 0.75);
+  let wrapMode = params.lifeB.w > 0.5;
+  let spacing = max(params.fieldA.x, 0.75);
   let cols = max(1u, u32(floor(worldW / spacing)));
   let rows = max(1u, u32(floor(worldH / spacing)));
   let sx = idx % cols;
   let sy = idx / cols;
   let samplePos = vec2f((f32(sx) + 0.5) * spacing, (f32(sy) + 0.5) * spacing);
-  let center = read_pheromone(i32(sx), i32(sy), cols, rows, sampleCount);
+  let center = read_pheromone(i32(sx), i32(sy), cols, rows, sampleCount, wrapMode);
 
   let diffuseMix = clamp(params.boidB.z, 0.0, 1.0);
   let fearDiffuseMix = clamp(params.lifeB.z, 0.0, 1.0);
@@ -1013,7 +1097,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var neighborSum = vec4f(0.0, 0.0, 0.0, 0.0);
   for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
     for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
-      neighborSum = neighborSum + read_pheromone(i32(sx) + ox, i32(sy) + oy, cols, rows, sampleCount);
+      neighborSum = neighborSum + read_pheromone(i32(sx) + ox, i32(sy) + oy, cols, rows, sampleCount, wrapMode);
     }
   }
   let neighborMean = neighborSum * (1.0 / 9.0);
@@ -1030,15 +1114,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   if (nodeSourceStrength > 0.00001) {
     let t = f32(params.counts.z) * 0.002;
-    for (var k: u32 = 0u; k < 6u; k = k + 1u) {
+    for (var k: u32 = 0u; k < 1u; k = k + 1u) {
       let fk = f32(k);
       let orbit = t * (0.52 + fk * 0.06) + fk * (TAU / 6.0);
       let node = vec2f(
         worldW * (0.5 + 0.34 * cos(orbit + 0.45 * sin(t * 0.33 + fk))),
         worldH * (0.5 + 0.28 * sin(orbit * 0.92 + fk * 0.37)),
       );
-      let dx = bounded_abs_delta(samplePos.x, node.x);
-      let dy = bounded_abs_delta(samplePos.y, node.y);
+      let dx = axis_abs_delta(samplePos.x, node.x, worldW, wrapMode);
+      let dy = axis_abs_delta(samplePos.y, node.y, worldH, wrapMode);
       let distSq = dx * dx + dy * dy;
       let spread = 1350.0 + 320.0 * fk;
       trail = trail + exp(-distSq / spread) * nodeSourceStrength * 0.34;
@@ -1050,8 +1134,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let hazardSpread = max(fearRadiusSq * 0.42, 1.0);
     for (var p: u32 = 0u; p < predatorCount; p = p + 1u) {
       let pred = predators[p];
-      let dx = bounded_abs_delta(samplePos.x, pred.posVel.x);
-      let dy = bounded_abs_delta(samplePos.y, pred.posVel.y);
+      let dx = axis_abs_delta(samplePos.x, pred.posVel.x, worldW, wrapMode);
+      let dy = axis_abs_delta(samplePos.y, pred.posVel.y, worldH, wrapMode);
       let distSq = dx * dx + dy * dy;
       if (distSq > fearRadiusSq * 4.0) {
         continue;
@@ -1079,8 +1163,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -1113,8 +1197,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -1164,8 +1248,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -1203,104 +1287,6 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
-const boidHeatmapRenderShader = `
-struct HeatSample {
-  densityDelta: vec4f,
-};
-
-struct SimParams {
-  world: vec4f,
-  counts: vec4f,
-  boidA: vec4f,
-  boidB: vec4f,
-  boidC: vec4f,
-  predatorA: vec4f,
-  predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
-  lifeA: vec4f,
-  lifeB: vec4f,
-};
-
-struct VSOut {
-  @builtin(position) position: vec4f,
-  @location(0) local: vec2f,
-  @location(1) color: vec3f,
-  @location(2) alpha: f32,
-};
-
-@group(0) @binding(0) var<storage, read> heatSamples: array<HeatSample>;
-@group(0) @binding(1) var<uniform> params: SimParams;
-
-fn quad_vertex(vertexIndex: u32) -> vec2f {
-  if (vertexIndex == 0u) {
-    return vec2f(-1.0, -1.0);
-  }
-  if (vertexIndex == 1u) {
-    return vec2f(1.0, -1.0);
-  }
-  if (vertexIndex == 2u) {
-    return vec2f(-1.0, 1.0);
-  }
-  if (vertexIndex == 3u) {
-    return vec2f(-1.0, 1.0);
-  }
-  if (vertexIndex == 4u) {
-    return vec2f(1.0, -1.0);
-  }
-  return vec2f(1.0, 1.0);
-}
-
-@vertex
-fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
-  let worldW = params.world.x;
-  let worldH = params.world.y;
-  let dotSpacing = max(params.heatmapA.x, 0.75);
-  let dotRadius = max(params.heatmapA.y, 0.5);
-
-  let cols = max(1u, u32(floor(worldW / dotSpacing)));
-  let sx = instanceIndex % cols;
-  let sy = instanceIndex / cols;
-  let center = vec2f((f32(sx) + 0.5) * dotSpacing, (f32(sy) + 0.5) * dotSpacing);
-  let local = quad_vertex(vertexIndex);
-  let world = center + local * dotRadius;
-
-  let density = max(0.0, heatSamples[instanceIndex].densityDelta.x);
-  let trendSignal = heatSamples[instanceIndex].densityDelta.y;
-  let intensity = 1.0 - exp(-density * 0.09);
-  let trend = clamp(trendSignal, -1.0, 1.0);
-  let lift = smoothstep(0.0, 0.78, intensity);
-
-  let dark = vec3f(0.03, 0.06, 0.17);
-  let neutral = vec3f(0.62, 0.64, 0.68);
-  let up = vec3f(1.00, 0.20, 0.14);
-  let down = vec3f(0.18, 0.46, 1.00);
-  let hue = select(mix(neutral, down, -trend), mix(neutral, up, trend), trend >= 0.0);
-  let color = mix(dark, hue, 0.22 + 0.78 * lift);
-
-  let clipX = world.x / worldW * 2.0 - 1.0;
-  let clipY = 1.0 - world.y / worldH * 2.0;
-
-  var out: VSOut;
-  out.position = vec4f(clipX, clipY, 0.0, 1.0);
-  out.local = local;
-  out.color = color;
-  out.alpha = 0.11 + 0.89 * smoothstep(0.0, 1.0, intensity);
-  return out;
-}
-
-@fragment
-fn fsMain(in: VSOut) -> @location(0) vec4f {
-  let distSq = dot(in.local, in.local);
-  if (distSq > 1.0) {
-    discard;
-  }
-  let edge = 1.0 - smoothstep(0.65, 1.0, distSq);
-  let alpha = in.alpha * (0.42 + 0.58 * edge);
-  return vec4f(in.color * alpha, alpha);
-}
-`;
-
 const pheromoneRenderShader = `
 struct PheromoneSample {
   values: vec4f,
@@ -1314,8 +1300,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -1353,8 +1339,8 @@ fn quad_vertex(vertexIndex: u32) -> vec2f {
 fn vsMain(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VSOut {
   let worldW = params.world.x;
   let worldH = params.world.y;
-  let dotSpacing = max(params.heatmapA.x, 0.75);
-  let dotRadius = max(params.heatmapA.y, 0.5);
+  let dotSpacing = max(params.fieldA.x, 0.75);
+  let dotRadius = max(params.fieldA.y, 0.5);
 
   let cols = max(1u, u32(floor(worldW / dotSpacing)));
   let sx = instanceIndex % cols;
@@ -1408,121 +1394,6 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
-const heatmapSampleComputeShader = `
-struct BoidState {
-  posVel: vec4f,
-  headingTurn: vec4f,
-  bio: vec4f,
-};
-
-struct HeatSample {
-  densityDelta: vec4f,
-};
-
-struct SimParams {
-  world: vec4f,
-  counts: vec4f,
-  boidA: vec4f,
-  boidB: vec4f,
-  boidC: vec4f,
-  predatorA: vec4f,
-  predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
-  lifeA: vec4f,
-  lifeB: vec4f,
-};
-
-@group(0) @binding(0) var<storage, read> boids: array<BoidState>;
-@group(0) @binding(1) var<storage, read> heatPrev: array<HeatSample>;
-@group(0) @binding(2) var<storage, read_write> heatNext: array<HeatSample>;
-@group(0) @binding(3) var<uniform> params: SimParams;
-
-const MIN_SAMPLES: u32 = 96u;
-const MAX_SAMPLES: u32 = 768u;
-
-fn bounded_abs_delta(a: f32, b: f32) -> f32 {
-  return abs(a - b);
-}
-
-fn hash_u32(x: u32) -> u32 {
-  var v = x;
-  v = v ^ (v >> 16u);
-  v = v * 0x7feb352du;
-  v = v ^ (v >> 15u);
-  v = v * 0x846ca68bu;
-  v = v ^ (v >> 16u);
-  return v;
-}
-
-@compute @workgroup_size(${HEATMAP_WORKGROUP_SIZE})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
-  let sampleCount = u32(params.counts.w);
-  if (idx >= sampleCount) {
-    return;
-  }
-
-  let worldW = params.world.x;
-  let worldH = params.world.y;
-  let boidCount = max(1u, u32(params.counts.x));
-  let dt = params.world.z;
-  let dotSpacing = max(params.heatmapA.x, 0.75);
-  let densityRadius = max(params.heatmapA.z, 2.0);
-  let densityRadiusSq = densityRadius * densityRadius;
-  let sampleBudget = clamp(u32(params.heatmapA.w), MIN_SAMPLES, MAX_SAMPLES);
-  let trendGain = max(params.heatmapB.x, 0.01);
-  let trendDeadband = max(params.heatmapB.y, 0.0);
-
-  let cols = max(1u, u32(floor(worldW / dotSpacing)));
-  let sx = idx % cols;
-  let sy = idx / cols;
-  let samplePos = vec2f((f32(sx) + 0.5) * dotSpacing, (f32(sy) + 0.5) * dotSpacing);
-
-  let adaptiveSamples = clamp(boidCount / 48u + 96u, MIN_SAMPLES, sampleBudget);
-  let sampleBoids = min(boidCount, adaptiveSamples);
-  let frameSeed = u32(params.counts.z);
-  let baseSeed = hash_u32(idx * 747796405u + frameSeed * 1664525u + 19u);
-  var boidIndex = baseSeed % boidCount;
-  var step = 1u;
-  if (boidCount > 1u) {
-    step = 1u + ((baseSeed >> 1u) % (boidCount - 1u));
-  }
-
-  var density = 0.0;
-  for (var i: u32 = 0u; i < sampleBoids; i = i + 1u) {
-    let boid = boids[boidIndex];
-    let dx = bounded_abs_delta(samplePos.x, boid.posVel.x);
-    let dy = bounded_abs_delta(samplePos.y, boid.posVel.y);
-    let distSq = dx * dx + dy * dy;
-    if (distSq < densityRadiusSq) {
-      density = density + exp(-distSq / max(densityRadiusSq * 0.62, 0.0001));
-    }
-    boidIndex = (boidIndex + step) % boidCount;
-  }
-
-  let rawDensity = density * (f32(boidCount) / f32(sampleBoids));
-  let previousDensity = heatPrev[idx].densityDelta.x;
-  let previousTrend = heatPrev[idx].densityDelta.y;
-  let previousFast = heatPrev[idx].densityDelta.z;
-  let previousSlow = heatPrev[idx].densityDelta.w;
-
-  let fastBlend = clamp(dt * 9.5, 0.12, 0.32);
-  let slowBlend = clamp(dt * 2.1, 0.03, 0.12);
-  let fastDensity = previousFast + (rawDensity - previousFast) * fastBlend;
-  let slowDensity = previousSlow + (rawDensity - previousSlow) * slowBlend;
-  let smoothedDensity = fastDensity + (previousDensity - fastDensity) * 0.08;
-
-  let trendRaw = fastDensity - slowDensity;
-  let trendMagnitude = max(0.0, abs(trendRaw) - trendDeadband);
-  let trendSigned = sign(trendRaw) * trendMagnitude;
-  let trendNormalized = clamp(trendSigned * trendGain, -1.0, 1.0);
-  let smoothedTrend = previousTrend + (trendNormalized - previousTrend) * 0.18;
-
-  heatNext[idx].densityDelta = vec4f(smoothedDensity, smoothedTrend, fastDensity, slowDensity);
-}
-`;
-
 const predatorRenderShader = `
 struct PredatorState {
   posVel: vec4f,
@@ -1538,8 +1409,8 @@ struct SimParams {
   boidC: vec4f,
   predatorA: vec4f,
   predatorB: vec4f,
-  heatmapA: vec4f,
-  heatmapB: vec4f,
+  fieldA: vec4f,
+  fieldB: vec4f,
   lifeA: vec4f,
   lifeB: vec4f,
 };
@@ -1601,26 +1472,70 @@ function rand(min, max) {
   return min + Math.random() * (max - min);
 }
 
-function getHeatmapDotSpacingWorld() {
-  return Math.max(0.75, config.heatmapDotSpacingPx / devicePixelRatioCached);
+function getFieldDotSpacingWorld() {
+  return Math.max(0.75, FIELD_DOT_SPACING / devicePixelRatioCached);
 }
 
-function getHeatmapDotRadiusWorld() {
-  return Math.max(0.5, config.heatmapDotRadiusPx / devicePixelRatioCached);
+function getFieldDotRadiusWorld() {
+  return Math.max(0.5, FIELD_DOT_RADIUS / devicePixelRatioCached);
 }
 
-function getHeatmapDiffuseRadiusWorld() {
-  return Math.max(2, config.heatmapDiffuseRadiusPx / devicePixelRatioCached);
+function getFieldDiffuseRadiusWorld() {
+  return Math.max(2, FIELD_DIFFUSE_RADIUS / devicePixelRatioCached);
+}
+
+function getBoidCruiseSpeed() {
+  return Math.max(0.2, Math.min(config.maxSpeed, config.minSpeed));
+}
+
+function formatBoidCount(value) {
+  return value.toLocaleString('en-US');
+}
+
+function getBoidCountStepIndex(value) {
+  let nearestIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < BOID_COUNT_STEPS.length; i += 1) {
+    const distance = Math.abs(BOID_COUNT_STEPS[i] - value);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = i;
+    }
+  }
+  return nearestIndex;
+}
+
+function syncBoidCountControl() {
+  if (boidCountRange) {
+    boidCountRange.min = '0';
+    boidCountRange.max = String(BOID_COUNT_STEPS.length - 1);
+    boidCountRange.step = '1';
+    boidCountRange.value = String(getBoidCountStepIndex(boidCount));
+  }
+  if (boidCountValue) {
+    boidCountValue.textContent = formatBoidCount(boidCount);
+  }
+}
+
+function setBoidCountFromControlIndex(rawIndex) {
+  const clampedIndex = Math.max(0, Math.min(BOID_COUNT_STEPS.length - 1, Math.round(rawIndex)));
+  const nextCount = BOID_COUNT_STEPS[clampedIndex];
+  if (nextCount === boidCount) {
+    return false;
+  }
+  boidCount = nextCount;
+  syncBoidCountControl();
+  return true;
 }
 
 function createInitialBoidData() {
-  const data = new Float32Array(BOID_COUNT * BOID_FLOATS);
-  const spacing = getHeatmapDotSpacingWorld();
+  const data = new Float32Array(boidCount * BOID_FLOATS);
+  const spacing = getFieldDotSpacingWorld();
   const cols = Math.max(1, Math.floor(worldWidth / spacing));
   const rows = Math.max(1, Math.floor(worldHeight / spacing));
-  for (let i = 0; i < BOID_COUNT; i += 1) {
+  for (let i = 0; i < boidCount; i += 1) {
     const heading = rand(0, Math.PI * 2);
-    const speed = Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25));
+    const speed = getBoidCruiseSpeed();
     const base = i * BOID_FLOATS;
     const cellX = Math.floor(rand(0, cols));
     const cellY = Math.floor(rand(0, rows));
@@ -1644,10 +1559,10 @@ function createInitialBoidData() {
 }
 
 function createInitialPredatorData() {
-  const data = new Float32Array(PREDATOR_COUNT * PREDATOR_FLOATS);
+  const data = new Float32Array(PREDATOR_BUFFER_COUNT * PREDATOR_FLOATS);
   const predatorSpeed = config.maxSpeed * config.predatorSpeedFactor;
 
-  for (let i = 0; i < PREDATOR_COUNT; i += 1) {
+  for (let i = 0; i < PREDATOR_BUFFER_COUNT; i += 1) {
     const heading = rand(0, Math.PI * 2);
     const base = i * PREDATOR_FLOATS;
     const predatorType = 0;
@@ -1686,24 +1601,30 @@ function updateTextState(mode = 'running') {
     ],
     dynamicSystems: [
       'flocking_flow_fields',
-      'bounded_edges',
+      config.boundaryWrap ? 'toroidal_wrap' : 'solid_bounce',
       'crowding_feedback',
     ],
-    boundaryMode: 'solid_bounce',
+    boundaryWrapEnabled: config.boundaryWrap,
+    boundaryMode: config.boundaryWrap ? 'toroidal_wrap' : 'solid_bounce',
     coordinateSystem: 'origin top-left, +x right, +y down',
     viewport: { width: worldWidth, height: worldHeight },
-    particleCount: BOID_COUNT,
-    boidCount: BOID_COUNT,
+    particleCount: boidCount,
+    boidCount,
     predatorCount: PREDATOR_COUNT,
     frameIndex,
     viewMode: renderMode,
-    heatmapPoints: heatmapPointCount,
-    heatmapDotSpacingPx: config.heatmapDotSpacingPx,
-    heatmapDotRadiusPx: config.heatmapDotRadiusPx,
-    heatmapDiffuseRadiusPx: config.heatmapDiffuseRadiusPx,
-    heatmapSampleBudget: config.heatmapSampleBudget,
-    heatmapTrendGain: config.heatmapTrendGain,
-    heatmapTrendDeadband: config.heatmapTrendDeadband,
+    fieldPoints: samplePointCount,
+    fieldDotSpacingPx: FIELD_DOT_SPACING,
+    fieldDotRadiusPx: FIELD_DOT_RADIUS,
+    fieldDiffuseRadiusPx: FIELD_DIFFUSE_RADIUS,
+    boidMaxSpeed: config.maxSpeed,
+    boidMinSpeed: config.minSpeed,
+    boidPerceptionRadius: config.perceptionRadius,
+    boidSeparationRadius: config.separationRadius,
+    boidAlignWeight: config.alignWeight,
+    boidCohesionWeight: config.cohesionWeight,
+    boidSeparationWeight: config.separationWeight,
+    boidTrailWeight: config.trailWeight,
     trailDeposit: config.physDeposit,
     sensorOffset: config.physSensorOffset,
     trailDiffuseMix: config.physDiffuseMix,
@@ -1714,7 +1635,7 @@ function updateTextState(mode = 'running') {
     physSensorWidth: config.physSensorWidth,
     physRotateAngleDeg: (config.maxTurnRate * 180) / Math.PI,
     physStepSize: config.physStepSize,
-    boidCruiseSpeed: Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25)),
+    boidCruiseSpeed: getBoidCruiseSpeed(),
     physDeposit: config.physDeposit,
     physDiffuseMix: config.physDiffuseMix,
     physDecay: config.physDecay,
@@ -1741,10 +1662,10 @@ function resizeCanvas() {
   worldHeight = Math.max(1, Math.floor(rect.height));
   const dpr = Math.max(window.devicePixelRatio || 1, 1);
   devicePixelRatioCached = dpr;
-  const dotSpacingWorld = getHeatmapDotSpacingWorld();
+  const dotSpacingWorld = getFieldDotSpacingWorld();
   const cols = Math.max(1, Math.floor(worldWidth / dotSpacingWorld));
   const rows = Math.max(1, Math.floor(worldHeight / dotSpacingWorld));
-  heatmapPointCount = Math.min(cols * rows, HEATMAP_MAX_POINTS);
+  samplePointCount = Math.min(cols * rows, FIELD_MAX_POINTS);
 
   canvas.width = Math.floor(worldWidth * dpr);
   canvas.height = Math.floor(worldHeight * dpr);
@@ -1754,19 +1675,19 @@ function createParamsArray(dtSeconds) {
   const frameScale = dtSeconds * 60;
   const predatorMaxTurnRate = config.maxTurnRate * config.predatorTurnRateFactor;
   const predatorMaxTurnAcceleration = config.maxTurnAcceleration * config.predatorTurnAccelerationFactor;
-  const boidCruiseSpeed = Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25));
+  const boidCruiseSpeed = getBoidCruiseSpeed();
   return new Float32Array([
     worldWidth, worldHeight, dtSeconds, frameScale,
-    BOID_COUNT, PREDATOR_COUNT, frameIndex, heatmapPointCount,
+    boidCount, PREDATOR_COUNT, frameIndex, samplePointCount,
     config.physSensorAngle, config.physSensorOffset, config.physSensorWidth, boidCruiseSpeed,
     config.maxTurnRate, config.alignWeight, config.physDiffuseMix, config.physDecay,
-    config.maxTurnAcceleration, config.cohesionWeight, config.separationWeight, 0.72,
+    config.maxTurnAcceleration, config.cohesionWeight, config.separationWeight, config.trailWeight,
     config.predatorAvoidWeight, config.predatorAttentionSeconds, config.perceptionRadius, config.separationRadius,
     config.predatorSprintBoost, config.predatorSpeedFactor, predatorMaxTurnRate, predatorMaxTurnAcceleration,
-    getHeatmapDotSpacingWorld(), getHeatmapDotRadiusWorld(), getHeatmapDiffuseRadiusWorld(), config.heatmapSampleBudget,
-    config.heatmapTrendGain, config.heatmapTrendDeadband, config.pherDiffusion, config.pherDecay,
+    getFieldDotSpacingWorld(), getFieldDotRadiusWorld(), getFieldDiffuseRadiusWorld(), FIELD_SAMPLE_BUDGET,
+    FIELD_TREND_GAIN, FIELD_TREND_DEADBAND, config.physDiffuseMix, config.physDecay,
     config.physDeposit, config.physNodeSourceStrength, config.predatorAvoidRadius, 0.25 + config.predatorFearStrength * 0.9,
-    config.predatorFearStrength, config.predatorFearRadius, config.physDiffuseMix, config.mutationRate,
+    config.predatorFearStrength, config.predatorFearRadius, config.physDiffuseMix, config.boundaryWrap ? 1 : 0,
   ]);
 }
 
@@ -1789,9 +1710,9 @@ function maybeScheduleEcologyReadback(timestampMs) {
 
   ecologyStats.readbackPending = true;
   ecologyStats.lastReadbackAtMs = timestampMs;
-  const sampleBoids = Math.min(BOID_STATS_SAMPLE_COUNT, BOID_COUNT);
+  const sampleBoids = Math.min(BOID_STATS_SAMPLE_COUNT, boidCount);
   const boidReadbackBytes = sampleBoids * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
-  const predatorReadbackBytes = PREDATOR_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const predatorReadbackBytes = PREDATOR_BUFFER_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
   const counterReadbackBytes = SIM_COUNTER_COUNT * Uint32Array.BYTES_PER_ELEMENT;
   const readbackEncoder = gpu.device.createCommandEncoder();
   readbackEncoder.copyBufferToBuffer(
@@ -1876,8 +1797,10 @@ function maybeScheduleEcologyReadback(timestampMs) {
           const py = predatorSample[pBase + 1] || 0;
           let dx = Math.abs(px - bx);
           let dy = Math.abs(py - by);
-          if (dx > worldWidth * 0.5) dx = worldWidth - dx;
-          if (dy > worldHeight * 0.5) dy = worldHeight - dy;
+          if (config.boundaryWrap) {
+            if (dx > worldWidth * 0.5) dx = worldWidth - dx;
+            if (dy > worldHeight * 0.5) dy = worldHeight - dy;
+          }
           if (dx * dx + dy * dy <= avoidRadiusSq) {
             nearAny = true;
             break;
@@ -1937,12 +1860,11 @@ function reseedSimulation() {
 
   const boidData = createInitialBoidData();
   const predatorData = createInitialPredatorData();
-  const zeroFlags = new Uint32Array(PREDATOR_COUNT);
+  const zeroFlags = new Uint32Array(PREDATOR_BUFFER_COUNT);
   const zeroCounters = new Uint32Array(SIM_COUNTER_COUNT);
   const zeroGridCounts = new Uint32Array(GRID_MAX_CELLS);
-  const zeroOccupancy = new Uint32Array(HEATMAP_MAX_POINTS);
-  const zeroHeat = new Float32Array(HEATMAP_MAX_POINTS * 4);
-  const zeroPheromone = new Float32Array(HEATMAP_MAX_POINTS * PHEROMONE_FLOATS);
+  const zeroOccupancy = new Uint32Array(FIELD_MAX_POINTS);
+  const zeroPheromone = new Float32Array(FIELD_MAX_POINTS * PHEROMONE_FLOATS);
 
   gpu.device.queue.writeBuffer(gpu.boidBuffers[0], 0, boidData);
   gpu.device.queue.writeBuffer(gpu.boidBuffers[1], 0, boidData);
@@ -1951,17 +1873,14 @@ function reseedSimulation() {
   gpu.device.queue.writeBuffer(gpu.simCountersBuffer, 0, zeroCounters);
   gpu.device.queue.writeBuffer(gpu.gridCellCountBuffer, 0, zeroGridCounts);
   gpu.device.queue.writeBuffer(gpu.occupancyBuffer, 0, zeroOccupancy);
-  gpu.device.queue.writeBuffer(gpu.heatmapBuffers[0], 0, zeroHeat);
-  gpu.device.queue.writeBuffer(gpu.heatmapBuffers[1], 0, zeroHeat);
   gpu.device.queue.writeBuffer(gpu.pheromoneBuffers[0], 0, zeroPheromone);
   gpu.device.queue.writeBuffer(gpu.pheromoneBuffers[1], 0, zeroPheromone);
 
   frameIndex = 0;
   accumulator = 0;
   currentBoidBufferIndex = 0;
-  currentHeatmapBufferIndex = 0;
   currentPheromoneBufferIndex = 0;
-  ecologyStats.avgSpeed = Math.max(0.2, Math.min(1.6, config.minSpeed * 1.25));
+  ecologyStats.avgSpeed = getBoidCruiseSpeed();
   ecologyStats.avgPredatorSpeed = 0;
   ecologyStats.boidsNearPredatorsFraction = 0;
   ecologyStats.predatorSamples = [];
@@ -1976,10 +1895,9 @@ function reseedSimulation() {
 
 function stepSimulation(dtSeconds) {
   if (!gpu) {
-    return { simCpuMs: 0, heatmapCpuMs: 0 };
+    return { simCpuMs: 0 };
   }
   const simStart = performance.now();
-  let heatmapCpuMs = 0;
 
   const boidUpdateBindGroup = gpu.boidUpdateBindGroups[currentBoidBufferIndex][currentPheromoneBufferIndex];
   const gridBuildBindGroup = gpu.gridBuildBindGroups[currentBoidBufferIndex];
@@ -1995,7 +1913,7 @@ function stepSimulation(dtSeconds) {
   try {
     simPass.setPipeline(gpu.occupancyClearPipeline);
     simPass.setBindGroup(0, gpu.occupancyClearBindGroup);
-    simPass.dispatchWorkgroups(Math.ceil(heatmapPointCount / HEATMAP_WORKGROUP_SIZE));
+    simPass.dispatchWorkgroups(Math.ceil(samplePointCount / FIELD_WORKGROUP_SIZE));
 
     simPass.setPipeline(gpu.gridClearPipeline);
     simPass.setBindGroup(0, gpu.gridClearBindGroup);
@@ -2003,11 +1921,11 @@ function stepSimulation(dtSeconds) {
 
     simPass.setPipeline(gpu.gridBuildPipeline);
     simPass.setBindGroup(0, gridBuildBindGroup);
-    simPass.dispatchWorkgroups(Math.ceil(BOID_COUNT / BOID_WORKGROUP_SIZE));
+    simPass.dispatchWorkgroups(Math.ceil(boidCount / BOID_WORKGROUP_SIZE));
 
     simPass.setPipeline(gpu.boidUpdatePipeline);
     simPass.setBindGroup(0, boidUpdateBindGroup);
-    simPass.dispatchWorkgroups(Math.ceil(BOID_COUNT / BOID_WORKGROUP_SIZE));
+    simPass.dispatchWorkgroups(Math.ceil(boidCount / BOID_WORKGROUP_SIZE));
   } finally {
     simPass.end();
   }
@@ -2015,17 +1933,19 @@ function stepSimulation(dtSeconds) {
   currentBoidBufferIndex = 1 - currentBoidBufferIndex;
   frameIndex += 1;
 
-  const predatorUpdateBindGroup = gpu.predatorUpdateBindGroups[currentBoidBufferIndex];
-  if (!predatorUpdateBindGroup) {
-    throw new Error('Missing predator update bind group.');
-  }
-  const predatorPass = encoder.beginComputePass();
-  try {
-    predatorPass.setPipeline(gpu.predatorUpdatePipeline);
-    predatorPass.setBindGroup(0, predatorUpdateBindGroup);
-    predatorPass.dispatchWorkgroups(1);
-  } finally {
-    predatorPass.end();
+  if (PREDATOR_COUNT > 0) {
+    const predatorUpdateBindGroup = gpu.predatorUpdateBindGroups[currentBoidBufferIndex];
+    if (!predatorUpdateBindGroup) {
+      throw new Error('Missing predator update bind group.');
+    }
+    const predatorPass = encoder.beginComputePass();
+    try {
+      predatorPass.setPipeline(gpu.predatorUpdatePipeline);
+      predatorPass.setBindGroup(0, predatorUpdateBindGroup);
+      predatorPass.dispatchWorkgroups(1);
+    } finally {
+      predatorPass.end();
+    }
   }
 
   const pheromoneUpdateBindGroup = gpu.pheromoneUpdateBindGroups[currentBoidBufferIndex][currentPheromoneBufferIndex];
@@ -2033,40 +1953,18 @@ function stepSimulation(dtSeconds) {
     throw new Error('Missing pheromone compute bind group.');
   }
 
-  const pheromoneStart = performance.now();
   const pheromonePass = encoder.beginComputePass();
   try {
     pheromonePass.setPipeline(gpu.pheromoneUpdatePipeline);
     pheromonePass.setBindGroup(0, pheromoneUpdateBindGroup);
-    pheromonePass.dispatchWorkgroups(Math.ceil(heatmapPointCount / HEATMAP_WORKGROUP_SIZE));
+    pheromonePass.dispatchWorkgroups(Math.ceil(samplePointCount / FIELD_WORKGROUP_SIZE));
   } finally {
     pheromonePass.end();
   }
-  heatmapCpuMs += performance.now() - pheromoneStart;
   currentPheromoneBufferIndex = 1 - currentPheromoneBufferIndex;
 
-  writeParams(dtSeconds);
-
-  const heatmapBindGroup = gpu.heatmapComputeBindGroups[currentBoidBufferIndex][currentHeatmapBufferIndex];
-  if (!heatmapBindGroup) {
-    throw new Error('Missing heatmap compute bind group.');
-  }
-
-  const heatmapStart = performance.now();
-  const heatPass = encoder.beginComputePass();
-  try {
-    heatPass.setPipeline(gpu.heatmapComputePipeline);
-    heatPass.setBindGroup(0, heatmapBindGroup);
-    heatPass.dispatchWorkgroups(Math.ceil(heatmapPointCount / HEATMAP_WORKGROUP_SIZE));
-  } finally {
-    heatPass.end();
-  }
-  heatmapCpuMs += performance.now() - heatmapStart;
-
-  currentHeatmapBufferIndex = 1 - currentHeatmapBufferIndex;
-
   gpu.device.queue.submit([encoder.finish()]);
-  return { simCpuMs: performance.now() - simStart, heatmapCpuMs };
+  return { simCpuMs: performance.now() - simStart };
 }
 
 function renderFrame() {
@@ -2075,10 +1973,12 @@ function renderFrame() {
   }
 
   const boidRenderBindGroup = gpu.boidRenderBindGroups[currentBoidBufferIndex];
-  const heatmapRenderBindGroup = gpu.boidHeatmapRenderBindGroups[currentHeatmapBufferIndex];
   const pheromoneRenderBindGroup = gpu.pheromoneRenderBindGroups[currentPheromoneBufferIndex];
   const predatorRenderBindGroup = gpu.predatorRenderBindGroup;
-  if (!boidRenderBindGroup || !heatmapRenderBindGroup || !pheromoneRenderBindGroup || !predatorRenderBindGroup) {
+  if (!boidRenderBindGroup || !pheromoneRenderBindGroup) {
+    throw new Error(`Missing render bind group for boid buffer index ${currentBoidBufferIndex}.`);
+  }
+  if (PREDATOR_COUNT > 0 && !predatorRenderBindGroup) {
     throw new Error(`Missing render bind group for boid buffer index ${currentBoidBufferIndex}.`);
   }
 
@@ -2097,21 +1997,17 @@ function renderFrame() {
   });
 
   try {
-    if (renderMode === 'heatmap') {
-      renderPass.setPipeline(gpu.boidHeatmapRenderPipeline);
-      renderPass.setBindGroup(0, heatmapRenderBindGroup);
-      renderPass.draw(6, heatmapPointCount, 0, 0);
-    } else if (renderMode === 'pheromone') {
+    if (renderMode === 'pheromone') {
       renderPass.setPipeline(gpu.pheromoneRenderPipeline);
       renderPass.setBindGroup(0, pheromoneRenderBindGroup);
-      renderPass.draw(6, heatmapPointCount, 0, 0);
+      renderPass.draw(6, samplePointCount, 0, 0);
     } else {
       renderPass.setPipeline(gpu.boidRenderPipeline);
       renderPass.setBindGroup(0, boidRenderBindGroup);
-      renderPass.draw(1, BOID_COUNT, 0, 0);
+      renderPass.draw(1, boidCount, 0, 0);
     }
 
-    if (renderMode !== 'pheromone') {
+    if (PREDATOR_COUNT > 0 && renderMode !== 'pheromone') {
       renderPass.setPipeline(gpu.predatorRenderPipeline);
       renderPass.setBindGroup(0, predatorRenderBindGroup);
       renderPass.draw(6, PREDATOR_COUNT, 0, 0);
@@ -2124,22 +2020,20 @@ function renderFrame() {
 }
 
 function updatePerformancePanel() {
-  if (!fpsValue || !frameCpuValue || !simCpuValue || !heatmapCpuValue || !renderCpuValue) {
+  if (!fpsValue || !frameCpuValue || !simCpuValue || !renderCpuValue) {
     return;
   }
   fpsValue.textContent = perfStats.fps.toFixed(1);
   frameCpuValue.textContent = perfStats.frameCpuMs.toFixed(2);
   simCpuValue.textContent = perfStats.simCpuMs.toFixed(2);
-  heatmapCpuValue.textContent = perfStats.heatmapCpuMs.toFixed(2);
   renderCpuValue.textContent = perfStats.renderCpuMs.toFixed(2);
 }
 
-function recordPerformance(frameCpuMs, simCpuMs, heatmapCpuMs, renderCpuMs, instantFps, timestamp) {
+function recordPerformance(frameCpuMs, simCpuMs, renderCpuMs, instantFps, timestamp) {
   const alpha = perfStats.alpha;
   perfStats.fps = perfStats.fps + (instantFps - perfStats.fps) * alpha;
   perfStats.frameCpuMs = perfStats.frameCpuMs + (frameCpuMs - perfStats.frameCpuMs) * alpha;
   perfStats.simCpuMs = perfStats.simCpuMs + (simCpuMs - perfStats.simCpuMs) * alpha;
-  perfStats.heatmapCpuMs = perfStats.heatmapCpuMs + (heatmapCpuMs - perfStats.heatmapCpuMs) * alpha;
   perfStats.renderCpuMs = perfStats.renderCpuMs + (renderCpuMs - perfStats.renderCpuMs) * alpha;
 
   if (timestamp - perfStats.lastPanelUpdate >= 180) {
@@ -2164,12 +2058,10 @@ function tick(timestamp) {
     lastFrameTime = timestamp;
     accumulator += Math.min(rawDelta, 0.05);
     let simCpuMs = 0;
-    let heatmapCpuMs = 0;
 
     while (accumulator >= FIXED_STEP) {
       const timings = stepSimulation(FIXED_STEP);
       simCpuMs += timings.simCpuMs;
-      heatmapCpuMs += timings.heatmapCpuMs;
       accumulator -= FIXED_STEP;
     }
     maybeScheduleEcologyReadback(timestamp);
@@ -2178,7 +2070,7 @@ function tick(timestamp) {
     renderFrame();
     const renderCpuMs = performance.now() - renderStart;
     const frameCpuMs = performance.now() - frameCpuStart;
-    recordPerformance(frameCpuMs, simCpuMs, heatmapCpuMs, renderCpuMs, instantFps, timestamp);
+    recordPerformance(frameCpuMs, simCpuMs, renderCpuMs, instantFps, timestamp);
     updateTextState();
     requestAnimationFrame(tick);
   } catch (error) {
@@ -2217,18 +2109,45 @@ function setHeaderStatus(text) {
   }
 }
 
+function updateRunningHeaderStatus() {
+  if (!gpu || gpuRuntimeError) {
+    return;
+  }
+  setHeaderStatus(`${formatBoidCount(boidCount)} boids, WebGPU compute + rendering active.`);
+}
+
+function getCurrentTextMode() {
+  try {
+    const parsed = JSON.parse(lastTextState);
+    if (typeof parsed.mode === 'string' && parsed.mode.length > 0) {
+      return parsed.mode;
+    }
+  } catch (error) {
+    // Keep default mode when text state isn't parseable.
+  }
+  return 'running';
+}
+
 function updateViewToggleLabel() {
   if (!viewToggleButton) {
     return;
   }
-  if (renderMode === 'heatmap') {
-    viewToggleButton.textContent = 'View: Heatmap';
-  } else if (renderMode === 'pheromone') {
+  if (renderMode === 'pheromone') {
     viewToggleButton.textContent = 'View: Pheromone';
   } else {
     viewToggleButton.textContent = 'View: Arrows';
   }
   viewToggleButton.setAttribute('aria-pressed', renderMode === 'boids' ? 'false' : 'true');
+}
+
+function updateBoundaryModeLabel() {
+  if (boundaryModeValue) {
+    boundaryModeValue.textContent = config.boundaryWrap ? 'Wrap' : 'No Wrap';
+  }
+  if (boundaryModeToggle) {
+    boundaryModeToggle.textContent = config.boundaryWrap ? 'Boundary: Wrap' : 'Boundary: No Wrap';
+    boundaryModeToggle.setAttribute('aria-pressed', config.boundaryWrap ? 'true' : 'false');
+  }
 }
 
 async function initWebGPU() {
@@ -2254,17 +2173,17 @@ async function initWebGPU() {
     alphaMode: 'opaque',
   });
 
-  const boidBufferBytes = BOID_COUNT * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
-  const predatorBufferBytes = PREDATOR_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
-  const heatmapBufferBytes = HEATMAP_MAX_POINTS * 4 * Float32Array.BYTES_PER_ELEMENT;
-  const pheromoneBufferBytes = HEATMAP_MAX_POINTS * PHEROMONE_FLOATS * Float32Array.BYTES_PER_ELEMENT;
-  const occupancyBufferBytes = HEATMAP_MAX_POINTS * Uint32Array.BYTES_PER_ELEMENT;
+  const boidBufferBytes = BOID_CAPACITY * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const predatorBufferBytes = PREDATOR_BUFFER_COUNT * PREDATOR_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const pheromoneBufferBytes = FIELD_MAX_POINTS * PHEROMONE_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const occupancyBufferBytes = FIELD_MAX_POINTS * Uint32Array.BYTES_PER_ELEMENT;
   const gridCellCountBytes = GRID_MAX_CELLS * Uint32Array.BYTES_PER_ELEMENT;
   const gridBoidIndexBytes = GRID_MAX_CELLS * GRID_CELL_CAPACITY * Uint32Array.BYTES_PER_ELEMENT;
   const paramsBufferBytes = 44 * Float32Array.BYTES_PER_ELEMENT;
-  const caughtFlagsBytes = PREDATOR_COUNT * Uint32Array.BYTES_PER_ELEMENT;
+  const caughtFlagsBytes = PREDATOR_BUFFER_COUNT * Uint32Array.BYTES_PER_ELEMENT;
   const simCountersBytes = SIM_COUNTER_COUNT * Uint32Array.BYTES_PER_ELEMENT;
-  const boidReadbackBytes = Math.min(BOID_STATS_SAMPLE_COUNT, BOID_COUNT) * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  const boidReadbackBytes =
+    Math.min(BOID_STATS_SAMPLE_COUNT, BOID_CAPACITY) * BOID_FLOATS * Float32Array.BYTES_PER_ELEMENT;
 
   const boidBuffers = [
     device.createBuffer({
@@ -2281,17 +2200,6 @@ async function initWebGPU() {
     size: predatorBufferBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
-
-  const heatmapBuffers = [
-    device.createBuffer({
-      size: heatmapBufferBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    }),
-    device.createBuffer({
-      size: heatmapBufferBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    }),
-  ];
 
   const pheromoneBuffers = [
     device.createBuffer({
@@ -2371,8 +2279,6 @@ async function initWebGPU() {
   const clearCaughtModule = await createCheckedShaderModule('catchClearShader', catchClearShader);
   const predatorResolveModule = await createCheckedShaderModule('predatorResolveShader', predatorResolveShader);
   const boidRenderModule = await createCheckedShaderModule('boidRenderShader', boidRenderShader);
-  const heatmapSampleComputeModule = await createCheckedShaderModule('heatmapSampleComputeShader', heatmapSampleComputeShader);
-  const boidHeatmapRenderModule = await createCheckedShaderModule('boidHeatmapRenderShader', boidHeatmapRenderShader);
   const pheromoneRenderModule = await createCheckedShaderModule('pheromoneRenderShader', pheromoneRenderShader);
   const predatorRenderModule = await createCheckedShaderModule('predatorRenderShader', predatorRenderShader);
 
@@ -2440,14 +2346,6 @@ async function initWebGPU() {
     },
   });
 
-  const heatmapComputePipeline = device.createComputePipeline({
-    layout: 'auto',
-    compute: {
-      module: heatmapSampleComputeModule,
-      entryPoint: 'main',
-    },
-  });
-
   const boidRenderPipeline = device.createRenderPipeline({
     layout: 'auto',
     vertex: {
@@ -2461,39 +2359,6 @@ async function initWebGPU() {
     },
     primitive: {
       topology: 'point-list',
-      cullMode: 'none',
-    },
-  });
-
-  const boidHeatmapRenderPipeline = device.createRenderPipeline({
-    layout: 'auto',
-    vertex: {
-      module: boidHeatmapRenderModule,
-      entryPoint: 'vsMain',
-    },
-    fragment: {
-      module: boidHeatmapRenderModule,
-      entryPoint: 'fsMain',
-      targets: [
-        {
-          format,
-	          blend: {
-	            color: {
-	              srcFactor: 'one',
-	              dstFactor: 'one-minus-src-alpha',
-	              operation: 'add',
-	            },
-            alpha: {
-              srcFactor: 'one',
-              dstFactor: 'one-minus-src-alpha',
-              operation: 'add',
-            },
-          },
-        },
-      ],
-    },
-    primitive: {
-      topology: 'triangle-list',
       cullMode: 'none',
     },
   });
@@ -2711,49 +2576,6 @@ async function initWebGPU() {
     ],
   ];
 
-  const heatmapComputeBindGroups = [
-    [
-      device.createBindGroup({
-        layout: heatmapComputePipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: boidBuffers[0] } },
-          { binding: 1, resource: { buffer: heatmapBuffers[0] } },
-          { binding: 2, resource: { buffer: heatmapBuffers[1] } },
-          { binding: 3, resource: { buffer: paramsBuffer } },
-        ],
-      }),
-      device.createBindGroup({
-        layout: heatmapComputePipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: boidBuffers[0] } },
-          { binding: 1, resource: { buffer: heatmapBuffers[1] } },
-          { binding: 2, resource: { buffer: heatmapBuffers[0] } },
-          { binding: 3, resource: { buffer: paramsBuffer } },
-        ],
-      }),
-    ],
-    [
-      device.createBindGroup({
-        layout: heatmapComputePipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: boidBuffers[1] } },
-          { binding: 1, resource: { buffer: heatmapBuffers[0] } },
-          { binding: 2, resource: { buffer: heatmapBuffers[1] } },
-          { binding: 3, resource: { buffer: paramsBuffer } },
-        ],
-      }),
-      device.createBindGroup({
-        layout: heatmapComputePipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: boidBuffers[1] } },
-          { binding: 1, resource: { buffer: heatmapBuffers[1] } },
-          { binding: 2, resource: { buffer: heatmapBuffers[0] } },
-          { binding: 3, resource: { buffer: paramsBuffer } },
-        ],
-      }),
-    ],
-  ];
-
   const clearCaughtBindGroup = device.createBindGroup({
     layout: clearCaughtPipeline.getBindGroupLayout(0),
     entries: [
@@ -2783,23 +2605,6 @@ async function initWebGPU() {
       layout: boidRenderPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: boidBuffers[1] } },
-        { binding: 1, resource: { buffer: paramsBuffer } },
-      ],
-    }),
-  ];
-
-  const boidHeatmapRenderBindGroups = [
-    device.createBindGroup({
-      layout: boidHeatmapRenderPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: heatmapBuffers[0] } },
-        { binding: 1, resource: { buffer: paramsBuffer } },
-      ],
-    }),
-    device.createBindGroup({
-      layout: boidHeatmapRenderPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: heatmapBuffers[1] } },
         { binding: 1, resource: { buffer: paramsBuffer } },
       ],
     }),
@@ -2836,7 +2641,6 @@ async function initWebGPU() {
     format,
     boidBuffers,
     predatorBuffer,
-    heatmapBuffers,
     pheromoneBuffers,
     occupancyBuffer,
     gridCellCountBuffer,
@@ -2855,9 +2659,7 @@ async function initWebGPU() {
     pheromoneUpdatePipeline,
     clearCaughtPipeline,
     predatorResolvePipeline,
-    heatmapComputePipeline,
     boidRenderPipeline,
-    boidHeatmapRenderPipeline,
     pheromoneRenderPipeline,
     predatorRenderPipeline,
     boidUpdateBindGroups,
@@ -2866,11 +2668,9 @@ async function initWebGPU() {
     occupancyClearBindGroup,
     gridBuildBindGroups,
     pheromoneUpdateBindGroups,
-    heatmapComputeBindGroups,
     clearCaughtBindGroup,
     predatorResolveBindGroup,
     boidRenderBindGroups,
-    boidHeatmapRenderBindGroups,
     pheromoneRenderBindGroups,
     predatorRenderBindGroup,
   };
@@ -2891,15 +2691,6 @@ function handleResize() {
   }
 }
 
-function updateHeatmapControlLabels() {
-  heatmapSpacingValue.textContent = config.heatmapDotSpacingPx.toFixed(1);
-  heatmapDotRadiusValue.textContent = config.heatmapDotRadiusPx.toFixed(2);
-  heatmapDiffuseValue.textContent = config.heatmapDiffuseRadiusPx.toFixed(0);
-  heatmapSamplesValue.textContent = config.heatmapSampleBudget.toFixed(0);
-  heatmapTrendGainValue.textContent = config.heatmapTrendGain.toFixed(1);
-  heatmapTrendDeadbandValue.textContent = config.heatmapTrendDeadband.toFixed(3);
-}
-
 function updateLifeFieldControlLabels() {
   pherTrailWeightValue.textContent = config.physDeposit.toFixed(2);
   pherFearWeightValue.textContent = config.physSensorOffset.toFixed(1);
@@ -2908,58 +2699,84 @@ function updateLifeFieldControlLabels() {
   panicBoostValue.textContent = ((config.maxTurnRate * 180) / Math.PI).toFixed(0);
 }
 
-function updateEcologyControlLabels() {
-  metabolismValue.textContent = config.metabolismIntensity.toFixed(2);
-  boidSprintBoostValue.textContent = config.boidSprintBoost.toFixed(2);
-  predatorSprintBoostValue.textContent = config.predatorSprintBoost.toFixed(2);
-  confusionStrengthValue.textContent = config.confusionStrength.toFixed(2);
-  mutationRateValue.textContent = config.mutationRate.toFixed(3);
+function updateBoidControlLabels() {
+  syncBoidCountControl();
+  turnAccelValue.textContent = turnAccelRange.value;
+  minSpeedValue.textContent = config.minSpeed.toFixed(2);
+  maxSpeedValue.textContent = config.maxSpeed.toFixed(2);
+  perceptionRadiusValue.textContent = config.perceptionRadius.toFixed(0);
+  separationRadiusValue.textContent = config.separationRadius.toFixed(0);
+  alignWeightValue.textContent = config.alignWeight.toFixed(2);
+  cohesionWeightValue.textContent = config.cohesionWeight.toFixed(2);
+  separationWeightValue.textContent = config.separationWeight.toFixed(2);
+  trailWeightValue.textContent = config.trailWeight.toFixed(2);
+}
+
+if (boidCountRange) {
+  boidCountRange.addEventListener('input', () => {
+    const changed = setBoidCountFromControlIndex(Number(boidCountRange.value));
+    if (!changed) {
+      return;
+    }
+    reseedSimulation();
+    updateRunningHeaderStatus();
+    updateTextState(getCurrentTextMode());
+  });
 }
 
 turnAccelRange.addEventListener('input', () => {
-  turnAccelValue.textContent = turnAccelRange.value;
   config.maxTurnAcceleration = (Number(turnAccelRange.value) * Math.PI) / 180;
+  updateBoidControlLabels();
 });
 
 minSpeedRange.addEventListener('input', () => {
-  minSpeedValue.textContent = Number(minSpeedRange.value).toFixed(2);
   config.minSpeed = Math.min(Number(minSpeedRange.value), config.maxSpeed);
+  minSpeedRange.value = config.minSpeed.toFixed(2);
+  updateBoidControlLabels();
+});
+
+maxSpeedRange.addEventListener('input', () => {
+  config.maxSpeed = Number(maxSpeedRange.value);
+  if (config.minSpeed > config.maxSpeed) {
+    config.minSpeed = config.maxSpeed;
+    minSpeedRange.value = config.minSpeed.toFixed(2);
+  }
+  updateBoidControlLabels();
+});
+
+perceptionRadiusRange.addEventListener('input', () => {
+  config.perceptionRadius = Number(perceptionRadiusRange.value);
+  updateBoidControlLabels();
+});
+
+separationRadiusRange.addEventListener('input', () => {
+  config.separationRadius = Number(separationRadiusRange.value);
+  updateBoidControlLabels();
+});
+
+alignWeightRange.addEventListener('input', () => {
+  config.alignWeight = Number(alignWeightRange.value);
+  updateBoidControlLabels();
+});
+
+cohesionWeightRange.addEventListener('input', () => {
+  config.cohesionWeight = Number(cohesionWeightRange.value);
+  updateBoidControlLabels();
+});
+
+separationWeightRange.addEventListener('input', () => {
+  config.separationWeight = Number(separationWeightRange.value);
+  updateBoidControlLabels();
+});
+
+trailWeightRange.addEventListener('input', () => {
+  config.trailWeight = Number(trailWeightRange.value);
+  updateBoidControlLabels();
 });
 
 predatorAttentionRange.addEventListener('input', () => {
   predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(2);
   config.physNodeSourceStrength = Number(predatorAttentionRange.value);
-});
-
-heatmapSpacingRange.addEventListener('input', () => {
-  config.heatmapDotSpacingPx = Number(heatmapSpacingRange.value);
-  updateHeatmapControlLabels();
-  handleResize();
-});
-
-heatmapDotRadiusRange.addEventListener('input', () => {
-  config.heatmapDotRadiusPx = Number(heatmapDotRadiusRange.value);
-  updateHeatmapControlLabels();
-});
-
-heatmapDiffuseRange.addEventListener('input', () => {
-  config.heatmapDiffuseRadiusPx = Number(heatmapDiffuseRange.value);
-  updateHeatmapControlLabels();
-});
-
-heatmapSamplesRange.addEventListener('input', () => {
-  config.heatmapSampleBudget = Number(heatmapSamplesRange.value);
-  updateHeatmapControlLabels();
-});
-
-heatmapTrendGainRange.addEventListener('input', () => {
-  config.heatmapTrendGain = Number(heatmapTrendGainRange.value);
-  updateHeatmapControlLabels();
-});
-
-heatmapTrendDeadbandRange.addEventListener('input', () => {
-  config.heatmapTrendDeadband = Number(heatmapTrendDeadbandRange.value);
-  updateHeatmapControlLabels();
 });
 
 pherTrailWeightRange.addEventListener('input', () => {
@@ -2987,35 +2804,16 @@ panicBoostRange.addEventListener('input', () => {
   updateLifeFieldControlLabels();
 });
 
-metabolismRange.addEventListener('input', () => {
-  config.metabolismIntensity = Number(metabolismRange.value);
-  updateEcologyControlLabels();
-});
-
-boidSprintBoostRange.addEventListener('input', () => {
-  config.boidSprintBoost = Number(boidSprintBoostRange.value);
-  updateEcologyControlLabels();
-});
-
-predatorSprintBoostRange.addEventListener('input', () => {
-  config.predatorSprintBoost = Number(predatorSprintBoostRange.value);
-  updateEcologyControlLabels();
-});
-
-confusionStrengthRange.addEventListener('input', () => {
-  config.confusionStrength = Number(confusionStrengthRange.value);
-  updateEcologyControlLabels();
-});
-
-mutationRateRange.addEventListener('input', () => {
-  config.mutationRate = Number(mutationRateRange.value);
-  updateEcologyControlLabels();
-});
+if (boundaryModeToggle) {
+  boundaryModeToggle.addEventListener('click', () => {
+    config.boundaryWrap = !config.boundaryWrap;
+    updateBoundaryModeLabel();
+    updateTextState();
+  });
+}
 
 viewToggleButton.addEventListener('click', () => {
   if (renderMode === 'boids') {
-    renderMode = 'heatmap';
-  } else if (renderMode === 'heatmap') {
     renderMode = 'pheromone';
   } else {
     renderMode = 'boids';
@@ -3032,12 +2830,10 @@ window.addEventListener('resize', handleResize);
 window.render_game_to_text = () => lastTextState;
 window.advanceTime = advanceTime;
 
-turnAccelValue.textContent = turnAccelRange.value;
-minSpeedValue.textContent = Number(minSpeedRange.value).toFixed(2);
+updateBoidControlLabels();
 predatorAttentionValue.textContent = Number(predatorAttentionRange.value).toFixed(2);
-updateHeatmapControlLabels();
 updateLifeFieldControlLabels();
-updateEcologyControlLabels();
+updateBoundaryModeLabel();
 updateViewToggleLabel();
 updatePerformancePanel();
 
@@ -3046,7 +2842,7 @@ updateTextState('initializing');
 
 initWebGPU()
   .then(() => {
-    setHeaderStatus(`${BOID_COUNT} boids, WebGPU compute + rendering active.`);
+    updateRunningHeaderStatus();
     gpu.device.addEventListener('uncapturederror', (event) => {
       gpuRuntimeError = true;
       console.error(event.error);
