@@ -82,6 +82,10 @@ canvas {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.control-actions {
+  padding-top: 0.55rem;
+}
+
 .control-dropdown {
   padding-top: 0.35rem;
 }
@@ -136,6 +140,8 @@ canvas {
 
 button {
   padding: 0.45rem 0.9rem;
+  width: 100%;
+  display: block;
   border-radius: 0.55rem;
   border: none;
   cursor: pointer;
@@ -151,6 +157,10 @@ button:hover {
 .secondary {
   color: #d7e7ff;
   background: linear-gradient(180deg, #2d4f78, #1b304f);
+}
+
+.button-spaced {
+  margin-top: 0.35rem;
 }
 
 @media (max-width: 1020px) {

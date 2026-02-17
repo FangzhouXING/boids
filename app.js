@@ -2113,7 +2113,6 @@ function updateRunningHeaderStatus() {
   if (!gpu || gpuRuntimeError) {
     return;
   }
-  setHeaderStatus(`${formatBoidCount(boidCount)} boids, WebGPU compute + rendering active.`);
 }
 
 function getCurrentTextMode() {

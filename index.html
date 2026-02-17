@@ -19,13 +19,11 @@
         </section>
 
         <aside class="controls" aria-label="Simulation controls">
-          <details class="control-section control-dropdown" open aria-label="Primary action controls">
-            <summary class="control-title">Buttons</summary>
-            <p class="fixed-count">Boundary: <strong id="boundaryModeValue">Wrap</strong></p>
-            <button id="boundaryModeToggle" class="secondary" type="button" aria-pressed="true">Boundary: Wrap</button>
-            <button id="viewToggleButton" class="secondary" type="button" aria-pressed="false">View: Arrows</button>
+          <section class="control-section control-actions" aria-label="Primary action controls">
             <button id="restartButton" type="button">Reseed</button>
-          </details>
+            <button id="boundaryModeToggle" class="secondary" type="button" aria-pressed="true">Boundary: Wrap</button>
+            <button id="viewToggleButton" class="secondary button-spaced" type="button" aria-pressed="false">View: Arrows</button>
+          </section>
 
           <details class="control-section control-dropdown" open aria-label="Important simulation sliders">
             <summary class="control-title">Important Sliders</summary>
